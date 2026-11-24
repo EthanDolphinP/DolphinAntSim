@@ -1,0 +1,44 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 57f12303d4fd47399395cba498bfb906, type: 3}
+  m_Name: Dairy
+  m_EditorClassIdentifier: 
+  Order: 3
+  Name: Dairy ants
+  Description: Aphid herders. Aphid farms cost half and give double honeydew. Slightly
+    fragile. Nurses at home make brood cheaper.
+  Shape: 3
+  Speed: 1
+  Health: 0.9
+  Damage: 1
+  Sense: 1
+  Lifespan: 1
+  AntCost: 1
+  LayRate: 1
+  ForageYield: 1
+  GardenYield: 1
+  Honeydew: 2
+  FarmCost: 0.5
+  SoldierRatio: 0.08
+  StartGarden: 0
+  Castes:
+  - Name: Nurse
+    Description: 'Stay in the nest feeding the larvae: brood needs less food.'
+    Base: 0
+    Share: 0.1
+    Size: 0.85
+    Speed: 0.8
+    Health: 0.8
+    Damage: 0.6
+    Carry: 1
+    StaysHome: 1
+    Perk: 2

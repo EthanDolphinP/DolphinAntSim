@@ -1,0 +1,55 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 57f12303d4fd47399395cba498bfb906, type: 3}
+  m_Name: Fire
+  m_EditorClassIdentifier: 
+  Order: 4
+  Name: Fire ants
+  Description: 'Painful stings: every ant hits 30% harder. Costlier to raise. Quick
+    minims forage; big majors guard.'
+  Shape: 0
+  Speed: 1
+  Health: 0.95
+  Damage: 1.3
+  Sense: 1
+  Lifespan: 1
+  AntCost: 1.15
+  LayRate: 1
+  ForageYield: 1
+  GardenYield: 1
+  Honeydew: 1
+  FarmCost: 1
+  SoldierRatio: 0.15
+  StartGarden: 0
+  Castes:
+  - Name: Minim
+    Description: Small, quick foragers. Fragile.
+    Base: 0
+    Share: 0.3
+    Size: 0.75
+    Speed: 1.15
+    Health: 0.7
+    Damage: 0.8
+    Carry: 1
+    StaysHome: 0
+    Perk: 0
+  - Name: Major
+    Description: Large soldiers with a big sting.
+    Base: 1
+    Share: 0.25
+    Size: 1.45
+    Speed: 0.9
+    Health: 1.5
+    Damage: 1.6
+    Carry: 1
+    StaysHome: 0
+    Perk: 0

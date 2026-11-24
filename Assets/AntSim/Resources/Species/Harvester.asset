@@ -1,0 +1,45 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 57f12303d4fd47399395cba498bfb906, type: 3}
+  m_Name: Harvester
+  m_EditorClassIdentifier: 
+  Order: 0
+  Name: Harvester ants
+  Description: Balanced seed gatherers. Foragers bring home 25% more food per trip,
+    and big-headed majors carry double.
+  Shape: 1
+  Speed: 1
+  Health: 1
+  Damage: 1
+  Sense: 1
+  Lifespan: 1
+  AntCost: 1
+  LayRate: 1
+  ForageYield: 1.25
+  GardenYield: 1
+  Honeydew: 1
+  FarmCost: 1
+  SoldierRatio: 0.1
+  StartGarden: 0
+  Castes:
+  - Name: Major
+    Description: 'Big-headed seed crushers: carry two crumbs a trip and bite hard,
+      but slower.'
+    Base: 0
+    Share: 0.12
+    Size: 1.35
+    Speed: 0.85
+    Health: 1.6
+    Damage: 1.4
+    Carry: 2
+    StaysHome: 0
+    Perk: 0
