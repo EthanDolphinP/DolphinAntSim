@@ -34,6 +34,7 @@ namespace AntSim
         [ReadOnly] public NativeArray<byte> Terrain; // per cell, see TerrainKind
         [ReadOnly] public NativeArray<ushort> HomeField; // per nest: walking distance home on a coarse grid
         public int FieldW, FieldH;
+        public int RaidFieldBase; // field slot of nest k's raid target = RaidFieldBase + k
         public float FieldInvScale;
         [ReadOnly] public NativeArray<float> StarveRates;
         [ReadOnly] public NativeArray<CombatResult> Combat;
@@ -120,6 +121,8 @@ namespace AntSim
 
             float speed;
             bool detour = false; // heading home round an obstacle, guided by the nest's way-home field
+            float2 navGoal = default; // soldiers: where they are walking to (for edge-following round obstacles)
+            bool hasNav = false;
             if (wild)
             {
                 speed = StepWildlife(ref a, ref rng, cr);
@@ -181,7 +184,7 @@ namespace AntSim
                 }
                 else if (soldier)
                 {
-                    StepSoldier(ref a, ref rng, toNest, nestDistSq, nest, ref speed);
+                    StepSoldier(ref a, ref rng, toNest, nestDistSq, nest, ref speed, ref navGoal, ref hasNav);
                 }
                 else
                 {
@@ -280,6 +283,16 @@ namespace AntSim
                     // instead of being steered straight back into it next tick.
                     float side = (a.Detour & 0x80) != 0 ? 1f : -1f;
                     if ((a.Detour & 0x7F) > 20 && Free(a.Position, a.Angle - side * 1.2f, 2.5f)) a.Angle -= side * 0.15f;
+                }
+                // Soldiers going somewhere keep following the edge until the way to their goal is clear (the "bug"
+                // rule robots use). Giving up after a couple of seconds let the goal pull them straight back into a
+                // U-shaped bay of rock or shore, where they paced forever.
+                if (hasNav && a.Detour != 0 && (a.Detour & 0x7F) < 40)
+                {
+                    float2 dg = navGoal - a.Position;
+                    float gl = math.length(dg);
+                    if (gl > 3f && !LineClear(a.Position, a.Position + dg / gl * math.min(8f, gl)))
+                        a.Detour = (byte)((a.Detour & 0x80) | 40);
                 }
             }
             if (np.x < 0f || np.x >= Grid.WorldSize.x)
@@ -582,6 +595,74 @@ namespace AntSim
             return target - pos;
         }
 
+        /// <summary>
+        /// A guard post near the nest that the squad can actually walk to more or less directly. Posts are picked at
+        /// random around the nest, so some land in a pond or across a river; soldiers sent there followed the shore,
+        /// gave up, turned back toward the post and paced the same nook forever. Walk back toward the nest until the
+        /// nest's way-home field says the spot is open and not much further to walk than to fly.
+        /// </summary>
+        float2 ReachablePost(int nestSlot, float2 nestPos, float2 post)
+        {
+            if (FieldW <= 0) return post;
+            int baseIdx = nestSlot * FieldW * FieldH;
+            float scale = 0.1f / FieldInvScale;
+            for (int k = 0; k < 8; k++)
+            {
+                float2 p = math.lerp(nestPos, post, 1f - k * 0.12f);
+                // Open ground with a little room around it: guards mill about at their post.
+                if (!Open(p) || !Open(p + new float2(4f, 0f)) || !Open(p - new float2(4f, 0f))
+                    || !Open(p + new float2(0f, 4f)) || !Open(p - new float2(0f, 4f))) continue;
+                int cx = math.clamp((int)(p.x * FieldInvScale), 0, FieldW - 1);
+                int cy = math.clamp((int)(p.y * FieldInvScale), 0, FieldH - 1);
+                ushort d = HomeField[baseIdx + cy * FieldW + cx];
+                if (d != HomeFieldJob.Unreachable && d * scale <= math.distance(nestPos, p) * 1.3f + 8f) return p;
+            }
+            return nestPos;
+        }
+
+        bool Open(float2 p) => Grid.Contains(p) && !TerrainKind.Blocks(Terrain[Grid.CellIndex(p)]);
+
+        /// <summary>Is the walk home from here much longer than the straight line (on the far side of water or rock)?</summary>
+        bool FarRoundHome(float2 pos, int nestSlot)
+        {
+            if (FieldW <= 0) return false;
+            int cx = math.clamp((int)(pos.x * FieldInvScale), 0, FieldW - 1);
+            int cy = math.clamp((int)(pos.y * FieldInvScale), 0, FieldH - 1);
+            ushort d = HomeField[nestSlot * FieldW * FieldH + cy * FieldW + cx];
+            if (d == HomeFieldJob.Unreachable) return false;
+            return d * (0.1f / FieldInvScale) > math.distance(pos, Nests[nestSlot].Position) * 1.3f + 8f;
+        }
+
+        /// <summary>Is the straight line between two points free of rock and water (checked every couple of units)?</summary>
+        bool LineClear(float2 from, float2 to)
+        {
+            float len = math.distance(from, to);
+            int n = math.min(16, (int)(len * 0.5f));
+            for (int i = 1; i <= n; i++)
+            {
+                float2 p = math.lerp(from, to, i / (float)(n + 1));
+                if (!Grid.Contains(p) || TerrainKind.Blocks(Terrain[Grid.CellIndex(p)])) return false;
+            }
+            return true;
+        }
+
+        /// <summary>The goal itself if it is on open ground, else the last open ground on the straight line to it.</summary>
+        float2 DryGoal(float2 from, float2 goal)
+        {
+            if (!Grid.Contains(goal)) goal = math.clamp(goal, 0.5f, Grid.WorldSize - 0.5f);
+            if (!TerrainKind.Blocks(Terrain[Grid.CellIndex(goal)])) return goal;
+            float2 d = from - goal;
+            float len = math.length(d);
+            if (len < 1e-3f) return goal;
+            d /= len;
+            for (float t = 1f; t < len; t += 1f)
+            {
+                float2 p = goal + d * t;
+                if (!TerrainKind.Blocks(Terrain[Grid.CellIndex(p)])) return p + d * 2f;
+            }
+            return from;
+        }
+
         /// <summary>Is the ground dist ahead along this heading walkable (and on the map)?</summary>
         bool Free(float2 pos, float angle, float dist)
         {
@@ -659,7 +740,8 @@ namespace AntSim
 
         // ------------------------------------------------------------------ soldiers
 
-        void StepSoldier(ref Ant a, ref Random rng, float2 toNest, float nestDistSq, NestData nest, ref float speed)
+        void StepSoldier(ref Ant a, ref Random rng, float2 toNest, float nestDistSq, NestData nest, ref float speed,
+            ref float2 navGoal, ref bool hasNav)
         {
             if (a.State == AntState.Migrating)
             {
@@ -671,7 +753,7 @@ namespace AntSim
             int sq = NestData.SquadOf(a, nest, out bool drone);
             if (drone)
             {
-                StepDrone(ref a, ref rng, nest, sq, ref speed);
+                StepDrone(ref a, ref rng, nest, sq, ref speed, ref navGoal, ref hasNav);
                 return;
             }
             bool raiding = nest.RaidActive != 0;
@@ -721,6 +803,7 @@ namespace AntSim
             // 2. Where is the squad going?
             float2 goal;
             float roam;
+            bool nearHome = homeGuard; // the goal is near the nest and reachable from it
             if (raiding && !homeGuard)
             {
                 // Squads converge on the target from different sides.
@@ -746,16 +829,26 @@ namespace AntSim
                 float ang = sector + ((ph & 1023) / 1023f - 0.5f) * (2f * math.PI / squads) * 0.8f;
                 float rad = patrol * (0.45f + 0.55f * (((ph >> 10) & 1023) / 1023f));
                 goal = nest.Position + new float2(math.cos(ang), math.sin(ang)) * rad;
+                goal = ReachablePost(a.Nest, nest.Position, goal);
                 roam = 4f;
+                nearHome = true;
             }
-            SquadMove(ref a, ref rng, ref speed, goal, roam, sq);
+            if (raiding && !homeGuard)
+            {
+                // Round lakes and ridges to the target, along its field (like the way home).
+                float2 toGoal = goal - a.Position;
+                float2 way = WayHome(a.Position, RaidFieldBase + a.Nest, toGoal, math.lengthsq(toGoal));
+                if (math.any(way != toGoal) && math.lengthsq(way) > 1f)
+                    goal = a.Position + math.normalize(way) * math.min(20f, math.length(toGoal));
+            }
+            SquadMove(ref a, ref rng, ref speed, goal, roam, sq, ref navGoal, ref hasNav, -1, nearHome);
         }
 
         /// <summary>
         /// Drones: escort soldiers. Their squads walk the food trails out to the places workers are
         /// harvesting, wait there a while and walk back; or stand guard around an aphid farm.
         /// </summary>
-        void StepDrone(ref Ant a, ref Random rng, NestData nest, int sq, ref float speed)
+        void StepDrone(ref Ant a, ref Random rng, NestData nest, int sq, ref float speed, ref float2 navGoal, ref bool hasNav)
         {
             // Any fight nearby comes first: that's what they're there for.
             float l = Sense(a.Colony, Pheromone.Alarm, a.Position, a.Angle + P.SensorAngle, false, false);
@@ -772,6 +865,7 @@ namespace AntSim
             float2 goal;
             float roam;
             int trail = -1;
+            bool nearHome = false;
             if (nest.SiteCount > 0)
             {
                 float4 site = Sites[a.Nest * NestData.MaxSites + dsq % nest.SiteCount];
@@ -805,9 +899,11 @@ namespace AntSim
                 int n = math.max(1, (int)nest.DroneSquadCount);
                 float ang = (dsq + 0.5f) / n * 2f * math.PI + (h & 1023) / 1023f;
                 goal = nest.Position + new float2(math.cos(ang), math.sin(ang)) * nest.Radius * 2.5f;
+                goal = ReachablePost(a.Nest, nest.Position, goal);
                 roam = 3f;
+                nearHome = true;
             }
-            SquadMove(ref a, ref rng, ref speed, goal, roam, sq, trail);
+            SquadMove(ref a, ref rng, ref speed, goal, roam, sq, ref navGoal, ref hasNav, trail, nearHome);
         }
 
         /// <summary>
@@ -816,10 +912,26 @@ namespace AntSim
         /// Everything blends smoothly so squads don't lurch between those modes. With a trail channel,
         /// marching ants walk along that trail when there is one going their way.
         /// </summary>
-        void SquadMove(ref Ant a, ref Random rng, ref float speed, float2 goal, float roam, int sq, int trail = -1)
+        void SquadMove(ref Ant a, ref Random rng, ref float speed, float2 goal, float roam, int sq,
+            ref float2 navGoal, ref bool hasNav, int trail = -1, bool nearHome = false)
         {
+            // A goal in the water or on rock (a raid on a spot in a pond, a distress call from the far shore) can't be
+            // reached: aim for the nearest dry ground on the way to it instead of pacing the shore forever.
+            goal = DryGoal(a.Position, goal);
+            if (nearHome && FarRoundHome(a.Position, a.Nest))
+            {
+                // A post by the nest, but the ant is on the wrong side of an inlet or a ridge (the walk home is much
+                // longer than the straight line). Every post can be walked to from the nest, so head home round the
+                // obstacle first, then out to the post.
+                float2 straight = Nests[a.Nest].Position - a.Position;
+                float2 way = WayHome(a.Position, a.Nest, straight, math.lengthsq(straight));
+                if (math.lengthsq(way) > 1f) goal = a.Position + math.normalize(way) * math.min(8f, math.length(way));
+            }
             float4 s = SquadSums[a.Nest * NestData.MaxSquads + sq];
             float2 centre = s.z > 0.5f ? s.xy / s.z : a.Position;
+            // The squad's centre can be out over water (half the squad on each shore). Don't try to walk to it then:
+            // a soldier pressing toward its squad across a pond never gets anywhere.
+            if (!LineClear(a.Position, centre)) centre = a.Position;
             float blob = 2f + math.sqrt(math.max(1f, s.z)) * 0.9f;
             float2 toC = centre - a.Position;
             float dC = math.length(toC);
@@ -865,6 +977,8 @@ namespace AntSim
             }
             if (!onTrail && math.lengthsq(want) > 1e-4f)
                 a.Angle = TurnTowards(a.Angle, math.atan2(want.y, want.x), P.TurnSpeed * Dt);
+            if (catchUp > 0.5f) { navGoal = centre; hasNav = true; }
+            else if (march > 0.5f) { navGoal = goal; hasNav = true; }
             a.Angle += rng.NextFloat(-1f, 1f) * P.Wander * wander * Dt;
             speed *= pace;
         }

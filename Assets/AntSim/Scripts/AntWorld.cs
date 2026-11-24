@@ -199,6 +199,8 @@ namespace AntSim
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         static void AutoCreate()
         {
+            GameSettings.Load();
+            GameSettings.Apply();
             if (FindObjectOfType<AntWorld>() == null && FindObjectOfType<AntGameMenu>() == null)
                 new GameObject("AntGameMenu").AddComponent<AntGameMenu>();
         }
@@ -552,6 +554,7 @@ namespace AntSim
                 FieldW = fieldW,
                 FieldH = fieldH,
                 FieldInvScale = 1f / FieldScale,
+                RaidFieldBase = MaxNests,
                 Pheromones = pheromones,
                 Food = (int*)food.GetUnsafePtr(),
                 Leaves = (int*)leaves.GetUnsafePtr(),
@@ -1305,7 +1308,7 @@ namespace AntSim
 
         void HandleInput()
         {
-            if (AntSimHud.IsTyping) return; // a text box has the keyboard
+            if (AntSimHud.IsTyping || AntSimHud.MenuOpen) return; // a text box or the Esc menu has the keyboard
             if (Input.GetKeyDown(KeyCode.F5)) Notify(SaveGame("Quicksave") ?? "Game saved (Quicksave).");
             if (Input.GetKeyDown(KeyCode.F9))
             {
@@ -1321,7 +1324,6 @@ namespace AntSim
             if (Input.GetKeyDown(KeyCode.X)) CancelRaid(CommandColony);
             if (Input.GetKeyDown(KeyCode.F)) { PlacingFarm = !PlacingFarm; PlacingNest = false; }
             if (Input.GetKeyDown(KeyCode.N)) { PlacingNest = !PlacingNest; PlacingFarm = false; }
-            if (Input.GetKeyDown(KeyCode.Escape)) PlacingFarm = PlacingNest = false;
             if (Input.GetKeyDown(KeyCode.G)) Notify(UpgradeGarden(CommandColony) ?? "Fungus garden upgraded.");
             if (Input.GetKeyDown(KeyCode.B)) Notify(HuntNearest(CommandColony, WildKind.Beetle) ?? "Soldiers sent to hunt a beetle.");
             if (Sandbox)

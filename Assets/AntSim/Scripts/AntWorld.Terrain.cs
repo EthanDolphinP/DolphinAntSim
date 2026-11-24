@@ -185,6 +185,9 @@ namespace AntSim
         const int FieldScale = 4;
         NativeArray<ushort> homeField;  // [nest * fieldW * fieldH + coarse cell]
         readonly float2[] homeFieldFor = new float2[MaxNests];
+        // Fields MaxNests.. 2*MaxNests-1: the way to each nest's raid or hunt target, so squads go round lakes to it.
+        readonly float2[] raidFieldFor = new float2[MaxNests];
+        readonly float[] raidFieldTime = new float[MaxNests];
         int fieldW, fieldH;
 
         /// <summary>
@@ -197,8 +200,23 @@ namespace AntSim
             {
                 fieldW = (grid.Width + FieldScale - 1) / FieldScale;
                 fieldH = (grid.Height + FieldScale - 1) / FieldScale;
-                homeField = new NativeArray<ushort>(MaxNests * fieldW * fieldH, Allocator.Persistent);
-                for (int k = 0; k < MaxNests; k++) homeFieldFor[k] = new float2(-1f);
+                homeField = new NativeArray<ushort>(2 * MaxNests * fieldW * fieldH, Allocator.Persistent);
+                for (int k = 0; k < MaxNests; k++) { homeFieldFor[k] = new float2(-1f); raidFieldFor[k] = new float2(-1000f); }
+            }
+            for (int k = 0; k < nestHigh; k++)
+            {
+                var n = nests[k];
+                if (n.Active == 0 || n.RaidActive == 0) continue;
+                // Recompute when the target has moved (hunted bugs walk), at most once a second.
+                if (math.distance(raidFieldFor[k], n.RaidTarget) < 12f || SimTime - raidFieldTime[k] < 1f) continue;
+                new HomeFieldJob
+                {
+                    Terrain = terrain, Field = homeField, Offset = (MaxNests + k) * fieldW * fieldH,
+                    Width = grid.Width, Height = grid.Height, Scale = FieldScale, CW = fieldW, CH = fieldH,
+                    Start = new int2((int)(n.RaidTarget.x / FieldScale), (int)(n.RaidTarget.y / FieldScale)),
+                }.Run();
+                raidFieldFor[k] = n.RaidTarget;
+                raidFieldTime[k] = SimTime;
             }
             for (int k = 0; k < nestHigh; k++)
             {

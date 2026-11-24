@@ -151,6 +151,7 @@ namespace AntSim
         /// <summary>Autosave every few minutes (called from Update).</summary>
         void UpdateAutosave(float dt)
         {
+            autosaveInterval = GameSettings.AutosaveMinutes * 60f; // Esc menu, Settings
             if (autosaveInterval <= 0f || State != GameState.Playing) return;
             autosaveTimer += dt;
             if (autosaveTimer < autosaveInterval) return;

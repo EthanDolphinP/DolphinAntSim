@@ -17,7 +17,6 @@ namespace AntSim
 
         enum Tab { Colonies, Orders, Nests, Farming, Diplomacy, Game, Help }
 
-        const string ScaleOffsetPref = "AntSim.UiScaleOffset";
         const float BarHeight = 34f;
         const float PanelWidth = 460f;
 
@@ -27,25 +26,33 @@ namespace AntSim
         /// <summary>A text box has keyboard focus: game hotkeys are off.</summary>
         public static bool IsTyping { get; set; }
 
+        /// <summary>The Esc menu is open: game hotkeys and camera keys are off.</summary>
+        public static bool MenuOpen => instance != null && instance.menuOpen;
+
         public static bool IsMouseOverUi() => UiKit.PointerOverUi;
 
         UiKit ui;
-        UiKit.Panel bar, alert, panel, dialog;
+        UiKit.Panel bar, alert, panel, dialog, shade, menu;
+        enum MenuPage { Main, Settings, ConfirmMenu, ConfirmDesktop }
+        bool menuOpen;
+        MenuPage menuPage;
+        bool pausedBeforeMenu;
+        GameSettings.Styles settingsStyles;
         Tab tab = Tab.Orders;
         bool tabChanged;
-        float scaleOffset;
         float fpsSmoothed = 60f;
         string saveName;
         string confirmDelete;
         List<SaveSlot> saves;
         float savesListedAt = -100f;
 
-        UiStyle barLabel, barLabelSmall, label, labelSmall, header, bigTitle, button, tabOn, tabOff, rowStyle, rowFocused, toggle, field;
+        UiStyle barLabel, barLabelSmall, label, labelSmall, header, bigTitle, button, tabOn, tabOff, rowStyle, rowFocused, toggle, field,
+            menuButton, menuButtonOn;
 
         void Awake()
         {
             instance = this;
-            scaleOffset = PlayerPrefs.GetFloat(ScaleOffsetPref, 0f);
+            GameSettings.Load();
             MakeStyles();
             ui = UiKit.Create(transform, "HUD", 10);
             bar = ui.CreatePanel("Top bar", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Color(0.06f, 0.06f, 0.08f, 0.95f),
@@ -61,8 +68,32 @@ namespace AntSim
             panel.Rect.anchoredPosition = new Vector2(10f, -(BarHeight + 40f));
             dialog = ui.CreatePanel("Dialog", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Color(0.09f, 0.09f, 0.11f, 0.97f),
                 new RectOffset(16, 16, 14, 14));
+            // Esc menu: a dark full-screen layer that swallows clicks, with the menu box on top.
+            shade = ui.CreatePanel("Menu shade", Vector2.zero, Vector2.zero, new Color(0f, 0f, 0f, 0.55f),
+                new RectOffset(0, 0, 0, 0), fitHeight: false);
+            shade.Rect.anchorMin = Vector2.zero;
+            shade.Rect.anchorMax = Vector2.one;
+            shade.Rect.offsetMin = shade.Rect.offsetMax = Vector2.zero;
+            menu = ui.CreatePanel("Menu", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Color(0.09f, 0.09f, 0.11f, 0.98f),
+                new RectOffset(18, 18, 16, 16));
             alert.Visible = false;
             dialog.Visible = false;
+            shade.Visible = false;
+            menu.Visible = false;
+        }
+
+        /// <summary>Opens or closes the Esc menu (pausing the game while it's open, if the setting says so).</summary>
+        public void SetMenu(bool open)
+        {
+            if (open == menuOpen || world == null) return;
+            menuOpen = open;
+            menuPage = MenuPage.Main;
+            if (open)
+            {
+                pausedBeforeMenu = world.Paused;
+                if (GameSettings.PauseInMenu) world.Paused = true;
+            }
+            else if (GameSettings.PauseInMenu) world.Paused = pausedBeforeMenu;
         }
 
         void OnDestroy()
@@ -75,14 +106,24 @@ namespace AntSim
             float fps = 1f / Mathf.Max(Time.unscaledDeltaTime, 1e-4f);
             fpsSmoothed = Mathf.Lerp(fpsSmoothed, fps, 0.05f);
             IsTyping = UiKit.AnyInputFocused;
-            if (!IsTyping && Input.GetKeyDown(KeyCode.H)) panelVisible = !panelVisible;
+            if (world == null) return;
+            if (Input.GetKeyDown(KeyCode.Escape))
+            {
+                // Esc backs out one step: a text box, a menu sub-page, the menu, placing mode; otherwise opens the menu.
+                var es = UnityEngine.EventSystems.EventSystem.current;
+                if (IsTyping && es != null) es.SetSelectedGameObject(null);
+                else if (menuOpen) { if (menuPage != MenuPage.Main) menuPage = MenuPage.Main; else SetMenu(false); }
+                else if (world.PlacingFarm || world.PlacingNest) world.PlacingFarm = world.PlacingNest = false;
+                else SetMenu(true);
+            }
+            if (!IsTyping && !menuOpen && Input.GetKeyDown(KeyCode.H)) panelVisible = !panelVisible;
         }
 
         float AutoScale()
         {
             // Designed for roughly 1100 x 900 "virtual" pixels; shrink or grow to match the real screen.
             float s = Mathf.Min(Screen.height / 900f, Screen.width / 1100f);
-            return Mathf.Clamp(s + scaleOffset, 0.6f, 3f);
+            return Mathf.Clamp(s + GameSettings.UiScaleOffset, 0.6f, 3f);
         }
 
         void LateUpdate()
@@ -109,6 +150,73 @@ namespace AntSim
                 ui.End();
             }
             DrawGameOver(v);
+            DrawMenu(v);
+        }
+
+        // ------------------------------------------------------------------ Esc menu
+
+        void DrawMenu(Vector2 v)
+        {
+            shade.Visible = menuOpen;
+            menu.Visible = menuOpen;
+            if (!menuOpen) return;
+            shade.Rect.SetAsLastSibling();
+            menu.Rect.SetAsLastSibling();
+            float w = Mathf.Min(menuPage == MenuPage.Settings ? 520f : 360f, v.x - 20f);
+            menu.Rect.sizeDelta = new Vector2(w, menu.Rect.sizeDelta.y);
+            ui.Begin(menu);
+            switch (menuPage)
+            {
+                case MenuPage.Main:
+                    ui.Label("Paused", bigTitle);
+                    ui.Label(world.Sandbox ? "Sandbox game" : $"{Me.Name}, {FormatTime(world.SimTime)}", labelSmall);
+                    ui.Space(6);
+                    if (ui.Button("Resume  [Esc]", menuButtonOn)) SetMenu(false);
+                    if (ui.Button("Quicksave  [F5]", menuButton))
+                        world.Notify(world.SaveGame("Quicksave") ?? "Game saved (Quicksave).");
+                    if (ui.Button("Save / load games...", menuButton)) { tab = Tab.Game; tabChanged = true; panelVisible = true; SetMenu(false); }
+                    if (ui.Button("Settings", menuButton)) menuPage = MenuPage.Settings;
+                    if (ui.Button("Help and controls", menuButton)) { tab = Tab.Help; tabChanged = true; panelVisible = true; SetMenu(false); }
+                    ui.Space(8);
+                    if (ui.Button("Quit to main menu", menuButton)) menuPage = MenuPage.ConfirmMenu;
+                    if (ui.Button("Quit to desktop", menuButton)) menuPage = MenuPage.ConfirmDesktop;
+                    if (!string.IsNullOrEmpty(world.Toast) && Time.unscaledTime - world.ToastTime < 5f) ui.Label(world.Toast, labelSmall);
+                    break;
+                case MenuPage.ConfirmMenu:
+                case MenuPage.ConfirmDesktop:
+                {
+                    bool desktop = menuPage == MenuPage.ConfirmDesktop;
+                    ui.Label(desktop ? "Quit to desktop?" : "Quit to the main menu?", header);
+                    ui.Label(world.State == GameState.Playing
+                        ? "Save first to carry on later; anything since your last save is lost otherwise."
+                        : "This game is over.", labelSmall);
+                    ui.Space(6);
+                    if (world.State == GameState.Playing && ui.Button("Save and quit", menuButtonOn))
+                    {
+                        string err = world.SaveGame("Quicksave");
+                        if (err != null) { world.Notify(err); menuPage = MenuPage.Main; }
+                        else { ui.End(); Leave(desktop); return; }
+                    }
+                    if (ui.Button("Quit without saving", menuButton)) { ui.End(); Leave(desktop); return; }
+                    if (ui.Button("Cancel", menuButton)) menuPage = MenuPage.Main;
+                    break;
+                }
+                case MenuPage.Settings:
+                    ui.Label("Settings", bigTitle);
+                    ui.BeginScroll(Mathf.Max(200f, v.y - 140f));
+                    bool back = GameSettings.Draw(ui, settingsStyles);
+                    ui.EndScroll();
+                    if (back) menuPage = MenuPage.Main;
+                    break;
+            }
+            ui.End();
+        }
+
+        void Leave(bool desktop)
+        {
+            menuOpen = false;
+            if (desktop) GameSettings.QuitToDesktop();
+            else AntGameMenu.ReturnToMenu(world);
         }
 
         ColonyInfo Me => world.Colonies[world.CommandColony];
@@ -129,8 +237,8 @@ namespace AntSim
             ui.Label($"Time {FormatTime(world.SimTime)}", barLabelSmall);
             ui.Label(world.SimTime < world.PeacefulStart
                 ? $"<color=#8fdc8f>Rivals peaceful for {FormatTime(world.PeacefulStart - world.SimTime)}</color>" : "", barLabelSmall);
-            ui.Label($"{world.TotalAnts:N0} ants total, {world.AntCount:N0} live", barLabelSmall);
-            ui.Label($"FPS {fpsSmoothed:0}  tick {world.LastTickMs:0.0} ms", barLabelSmall);
+            ui.Label(GameSettings.ShowStats ? $"{world.TotalAnts:N0} ants total, {world.AntCount:N0} live" : "", barLabelSmall);
+            ui.Label(GameSettings.ShowStats ? $"FPS {fpsSmoothed:0}  tick {world.LastTickMs:0.0} ms" : "", barLabelSmall);
 
             ui.FlexibleSpace();
 
@@ -141,14 +249,16 @@ namespace AntSim
             ui.Space(8);
             if (ui.Button(panelVisible ? "Hide panel" : "Show panel", button, 92)) panelVisible = !panelVisible;
             ui.Space(8);
-            if (ui.Button("A-", button, 32)) SetScaleOffset(scaleOffset - 0.1f);
-            if (ui.Button("A+", button, 32)) SetScaleOffset(scaleOffset + 0.1f);
+            if (ui.Button("A-", button, 32)) SetScaleOffset(GameSettings.UiScaleOffset - 0.1f);
+            if (ui.Button("A+", button, 32)) SetScaleOffset(GameSettings.UiScaleOffset + 0.1f);
+            ui.Space(8);
+            if (ui.Button("Menu  [Esc]", button, 96)) SetMenu(true);
         }
 
-        void SetScaleOffset(float v)
+        static void SetScaleOffset(float v)
         {
-            scaleOffset = Mathf.Clamp(v, -1f, 2f);
-            PlayerPrefs.SetFloat(ScaleOffsetPref, scaleOffset);
+            GameSettings.UiScaleOffset = GameSettings.ClampScaleOffset(v);
+            GameSettings.Save();
         }
 
         // ------------------------------------------------------------------ alerts
@@ -620,8 +730,8 @@ namespace AntSim
             }
             ui.EndRow();
             ui.Label(world.autosaveInterval > 0f
-                ? $"The game also autosaves every {world.autosaveInterval / 60f:0} minutes. F9 loads the quicksave."
-                : "Autosave is off. F9 loads the quicksave.", labelSmall);
+                ? $"The game also autosaves every {world.autosaveInterval / 60f:0} minutes (Esc, Settings). F9 loads the quicksave."
+                : "Autosave is off (Esc, Settings). F9 loads the quicksave.", labelSmall);
 
             ui.Space(8);
             ui.Label("Load", header);
@@ -665,6 +775,7 @@ namespace AntSim
                 "N: pick a site for a new nest (Nests tab)\n" +
                 "F5: quicksave      F9: load the quicksave (Game tab for more)\n" +
                 "Tab: select next colony      P: pheromone view      H: hide panel\n" +
+                "Esc: menu (settings, save, quit to menu or desktop)\n" +
                 (world.Sandbox ? "Left click: drop food.  T / Y: +25k workers / +5k soldiers\n" : "") + "\n" +
                 "<b>Reading the map</b>\n" +
                 "Green: bushes.  Gold: food and honeydew.  Coloured haze: trails.  Red haze: fighting.\n" +
@@ -728,6 +839,16 @@ namespace AntSim
                 FontSize = 14, Text = text, Align = TextAnchor.UpperLeft, Wrap = true,
                 Background = new Color(1f, 1f, 1f, 0.03f), Hover = new Color(1f, 1f, 1f, 0.09f), Pressed = new Color(0.30f, 0.42f, 0.62f, 0.6f),
                 Padding = new RectOffset(8, 8, 6, 6),
+            };
+            menuButton = button.Copy();
+            menuButton.Height = 34f;
+            menuButton.FontSize = 15;
+            menuButtonOn = tabOn.Copy();
+            menuButtonOn.Height = 34f;
+            menuButtonOn.FontSize = 15;
+            settingsStyles = new GameSettings.Styles
+            {
+                Header = header, Label = label, Small = labelSmall, Button = button, ButtonOn = tabOn, Toggle = toggle,
             };
             rowFocused = rowStyle.Copy();
             rowFocused.Background = rowFocused.Hover = new Color(0.30f, 0.42f, 0.62f, 0.45f);

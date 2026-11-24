@@ -38,15 +38,25 @@ namespace AntSim
             // Someone else moved the zoom (new game, focus on a colony): take it as the new target.
             if (!Mathf.Approximately(cam.orthographicSize, lastSetSize)) targetSize = cam.orthographicSize;
 
-            // No WASD panning while typing (a save name, say).
-            var move = AntSimHud.IsTyping ? Vector3.zero
+            // No WASD panning while typing (a save name, say) or while the Esc menu is open.
+            bool blocked = AntSimHud.IsTyping || AntSimHud.MenuOpen;
+            var move = blocked ? Vector3.zero
                 : new Vector3(Input.GetAxisRaw("Horizontal"), Input.GetAxisRaw("Vertical"), 0f);
+            if (!blocked && GameSettings.EdgePan && Application.isFocused)
+            {
+                // Scroll when the mouse touches the edge of the screen (Settings).
+                var m = Input.mousePosition;
+                const float edge = 6f;
+                if (m.x >= 0 && m.x <= edge) move.x = -1f; else if (m.x >= Screen.width - edge && m.x <= Screen.width) move.x = 1f;
+                if (m.y >= 0 && m.y <= edge) move.y = -1f; else if (m.y >= Screen.height - edge && m.y <= Screen.height) move.y = 1f;
+            }
+            panSpeed = GameSettings.PanSpeed;
             if (move.sqrMagnitude > 1f) move.Normalize();
             panVelocity = Vector3.Lerp(panVelocity, move * (cam.orthographicSize * panSpeed), ease);
             transform.position += panVelocity * dt;
 
             if (Input.GetMouseButtonDown(1) || Input.GetMouseButtonDown(2)) lastMouse = Input.mousePosition;
-            if (Input.GetMouseButton(1) || Input.GetMouseButton(2))
+            if (!blocked && (Input.GetMouseButton(1) || Input.GetMouseButton(2)))
             {
                 Vector3 a = cam.ScreenToWorldPoint(lastMouse);
                 Vector3 b = cam.ScreenToWorldPoint(Input.mousePosition);
@@ -55,9 +65,9 @@ namespace AntSim
             }
 
             float scroll = Input.mouseScrollDelta.y;
-            if (scroll != 0f && !AntSimHud.IsMouseOverUi())
+            if (scroll != 0f && !blocked && !AntSimHud.IsMouseOverUi())
             {
-                targetSize = Mathf.Clamp(targetSize * Mathf.Pow(zoomStep, scroll), minSize, maxSize);
+                targetSize = Mathf.Clamp(targetSize * Mathf.Pow(zoomStep, scroll * GameSettings.ZoomSpeed), minSize, maxSize);
                 zoomScreenPoint = Input.mousePosition;
             }
             if (Mathf.Abs(cam.orthographicSize - targetSize) > targetSize * 0.0005f)

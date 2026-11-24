@@ -108,6 +108,8 @@ Every game gets a new map. Pick a style on the start screen:
 
 **Rock** (grey) and **water** (blue) block ants and bugs. Ants feel ahead for them and follow the edge round (keeping to one side until they're clear); wandering ants just turn back. Their sensors treat obstacles as dead ends, so trails bend around them.
 
+**Guard posts and raids:** soldiers' patrol posts are always on open ground the squad can walk to from the nest (not in a pond or across an inlet), and soldiers on the wrong side of water head home round it first. Raids and hunts get their own route map to the target, so squads walk round lakes to it. Soldiers going somewhere keep following an edge until the straight way to their goal is clear, and don't try to walk to squad-mates across water.
+
 **Way home:** every nest has a coarse "way home" map (walking distance on 4×4 cells, going round rock and water), built when the nest appears or moves. An ant heading home walks straight at the nest while that works; when the straight line would cross a river or a ridge, it follows the map to the nearest ford or gap instead. **Sand** (tan, mostly on shores) slows ants to 60%. Princesses and winged males fly over everything.
 
 The generator clears a border and a clearing around every starting nest, then flood-fills from the first nest: if a nest can't be reached, it digs a sandy path; walkable pockets nobody can reach become rock, so no food or bugs get stranded. Food, bushes and wildlife never spawn on rock or water, and you can't found a nest there. A 768 map generates in about 25 ms.
@@ -155,6 +157,14 @@ When at least one of two colonies at war is asleep (off-screen), their battles a
 | T / Y | Sandbox only: +25,000 workers / +5,000 soldiers |
 | F5 / F9 | Quicksave / load the quicksave |
 | H | Hide / show the side panel |
+| Esc | Menu: resume, quicksave, save/load, settings, help, quit to main menu or desktop (also backs out of placing and sub-pages) |
+
+**Esc menu and settings.** Esc (or **Menu** in the top bar) pauses the game and opens the menu. Quitting to the main menu or the desktop asks first and offers *Save and quit*. **Settings** (also on the start screen, next to *Start* and *Quit*) are remembered between sessions:
+
+- **Display:** full screen or window, VSync, frame rate cap (when VSync is off).
+- **Camera:** scroll and zoom speed, scrolling at the screen edge.
+- **Interface:** interface size (same as A- / A+), FPS and ant counts in the top bar, pausing while the menu is open.
+- **Saving:** autosave off or every 2, 5 or 10 minutes.
 
 The HUD and start screen are real Unity UI (uGUI) built in code by `UiKit`, a small immediate-mode layer over pooled Canvas elements (no prefabs needed). The HUD scales with the window. The **top bar** shows your colony (ants, food, queen), time, pause/speed, panel toggle and **A- / A+** to resize the UI (remembered between sessions). An **alert strip** under it warns you about raids and dying ants. The **side panel** is draggable and has tabs: *Colonies* (click one to jump to it), *Orders*, *Nests*, *Farming*, *Diplomacy*, *Game* (save, load, quit) and *Help*. It scrolls if it doesn't fit.
 
@@ -232,6 +242,7 @@ Files: `Assets/AntSim/Scripts/` (C#), `Assets/AntSim/Resources/` (shaders). The 
 - **Terrain:** across all four map styles, 0 of about 2,300 ants ever stood inside rock or water after 90 s, and every colony kept foraging. Cover: Meadow 3% rock; Rocky 16% rock; Lakes 19% water, 10% sand; Mixed 7% rock, 9% water.
 - **Save/load round trip:** a 4-colony game saved after 4 minutes (3 rivals asleep) reloads with every count identical (ants, castes, pheromone total, terrain, nests, farms, food, brood), then plays on normally for 2 more minutes.
 - **Performance with terrain and castes:** 200,000 ants at 11.0–12.0 ms per tick on Meadow, Mixed and Rocky maps, so obstacles and castes cost nothing measurable.
+- **Trapped ants:** 18 Lakes, Mixed and Rocky maps, counting ants that spend 40 s pressed against rock or water without getting anywhere: 122 with the old code, 31 now (mostly soldiers sent to posts across water before). 150,000 ants tick 0.3–0.7 ms slower for it (about 11 ms).
 - **Way home:** 200 food-carrying ants released on the far side of a river from their nest, on 6 maps. Before, 131–188 were still stranded after 2 minutes, crowding the shore. With the way-home map, 0–8 are left after 90–120 s. 200,000 ants still tick at 11.7–12.6 ms.
 - **Sleeping border war:** two sleeping colonies at war with overlapping territories lose about 40 ants each per 30 s, and their opinions of each other fall to about −60 within 2 minutes. A 1,770-soldier statistical raid wore a 260-soldier defence down to about 130 in 60 s, then both colonies woke and the attacker stormed the nest.
 - **Diplomacy in AI games (25 minutes, 4 colonies, 512 and 768 maps):** wars break out between neighbours from minute 9–13 on. Truces follow within a few minutes; some lapse back into war and some become a lasting peace. Distant colonies on a 768 map mostly stay at peace. Relations survive save/load unchanged. Ticks stay at 1.4–2.1 ms.

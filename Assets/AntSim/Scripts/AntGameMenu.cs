@@ -31,7 +31,10 @@ namespace AntSim
         List<SaveSlot> saves;
         bool showAllSaves;
         string confirmDelete;
-        UiStyle title, header, label, small, error, button, buttonOn, card, cardOn, field;
+        UiStyle title, header, label, small, error, button, buttonOn, card, cardOn, field, toggle;
+        enum Page { Main, Settings, ConfirmQuit }
+        Page pageShown;
+        GameSettings.Styles settingsStyles;
 
         /// <summary>Tears down the current game and shows the start screen again.</summary>
         public static void ReturnToMenu(AntWorld world)
@@ -71,6 +74,7 @@ namespace AntSim
             cam.backgroundColor = new Color(0.04f, 0.04f, 0.05f);
             cam.clearFlags = CameraClearFlags.SolidColor;
 
+            GameSettings.Load();
             MakeStyles();
             ui = UiKit.Create(transform, "Menu", 20);
             background = ui.CreatePanel("Background", Vector2.zero, Vector2.zero, new Color(0.05f, 0.05f, 0.07f, 1f),
@@ -99,7 +103,13 @@ namespace AntSim
 
         void LateUpdate()
         {
-            ui.Scale = Mathf.Clamp(Mathf.Min(Screen.height / 900f, Screen.width / 1100f), 0.6f, 3f);
+            if (Input.GetKeyDown(KeyCode.Escape))
+            {
+                var es = UnityEngine.EventSystems.EventSystem.current;
+                if (UiKit.AnyInputFocused && es != null) es.SetSelectedGameObject(null);
+                else pageShown = pageShown == Page.Main ? Page.ConfirmQuit : Page.Main;
+            }
+            ui.Scale = Mathf.Clamp(Mathf.Min(Screen.height / 900f, Screen.width / 1100f) + GameSettings.UiScaleOffset, 0.6f, 3f);
             Vector2 v = ui.VirtualSize;
             float w = Mathf.Min(760f, v.x - 20f);
             page.Rect.sizeDelta = new Vector2(w, page.Rect.sizeDelta.y);
@@ -107,7 +117,21 @@ namespace AntSim
 
             ui.Begin(page);
             ui.BeginScroll(v.y - 20f);
-            DrawPage();
+            if (pageShown == Page.Settings)
+            {
+                ui.Label("Settings", title);
+                if (GameSettings.Draw(ui, settingsStyles)) pageShown = Page.Main;
+            }
+            else if (pageShown == Page.ConfirmQuit)
+            {
+                ui.Label("Quit to desktop?", title);
+                ui.BeginRow();
+                if (ui.Button("Quit", buttonOn, 160)) GameSettings.QuitToDesktop();
+                if (ui.Button("Cancel", button, 160)) pageShown = Page.Main;
+                ui.FlexibleSpace();
+                ui.EndRow();
+            }
+            else DrawPage();
             ui.EndScroll();
             ui.End();
         }
@@ -116,7 +140,9 @@ namespace AntSim
         {
             ui.BeginRow();
             ui.Label("Dolphin Ant Simulator", title);
-            if (ui.Button("Start", buttonOn, 120)) { StartGame(); return; }
+            if (ui.Button("Start", buttonOn, 110)) { StartGame(); return; }
+            if (ui.Button("Settings", button, 100)) pageShown = Page.Settings;
+            if (ui.Button("Quit", button, 70)) pageShown = Page.ConfirmQuit;
             ui.EndRow();
             ui.Label("Raise a colony from a single queen. Find food, farm aphids and fungus, hunt bugs, " +
                      "and outlast the rival colonies.", small);
@@ -265,6 +291,11 @@ namespace AntSim
                 FontSize = 14, Text = text, Align = TextAnchor.UpperLeft, Wrap = true,
                 Background = new Color(0.12f, 0.12f, 0.15f), Hover = new Color(0.20f, 0.20f, 0.25f), Pressed = new Color(0.22f, 0.32f, 0.50f),
                 Padding = new RectOffset(10, 10, 8, 8),
+            };
+            toggle = new UiStyle { FontSize = 15, Text = text };
+            settingsStyles = new GameSettings.Styles
+            {
+                Header = header, Label = label, Small = small, Button = button, ButtonOn = buttonOn, Toggle = toggle,
             };
             cardOn = card.Copy();
             cardOn.Background = cardOn.Hover = new Color(0.22f, 0.32f, 0.50f);
