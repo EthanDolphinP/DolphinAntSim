@@ -20,6 +20,18 @@ Open this folder in Unity **2022.3.49f1** (Unity Hub ▸ Add ▸ this folder). T
 
 The game lands in `Builds/Windows`. Zip that folder (leave out the `*_BurstDebugInformation_DoNotShip` folder) and attach the zip to a GitHub release.
 
+### Making a release
+
+With [GitHub CLI](https://cli.github.com/) signed in once (`gh auth login`), close the project in Unity and run:
+
+```
+.elease.ps1 1.2 "What's new in this version"
+```
+
+It sets the version, builds the .exe, zips it, commits and tags `v1.2`, pushes, and publishes the GitHub release with the zip attached. Leave out the notes to have GitHub list the commits instead.
+
+**Update notice:** the start screen asks GitHub for the latest release once per run. If it's newer than the running version, it says so and offers a **Download** button that opens the release page. Nothing is downloaded or replaced automatically, and the check can be turned off in Settings.
+
 ## Running it in the editor
 
 Open any scene (e.g. `Assets/Scenes/SampleScene`) and press **Play**. The **start screen** appears: name your colony, pick a species and colour, the number of rivals, map size, terrain, wildlife and mode, then press **Start**. Saved games are listed at the top: **Continue** picks up the latest one.

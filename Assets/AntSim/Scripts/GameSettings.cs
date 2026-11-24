@@ -24,6 +24,8 @@ namespace AntSim
         public static bool PauseInMenu = true;        // the Esc menu pauses the game
         // Saving
         public static int AutosaveMinutes = 5;        // 0 = off
+        // Updates
+        public static bool CheckUpdates = true;       // ask GitHub for a newer release on the start screen
 
         public static readonly int[] FpsCaps = { 0, 30, 60, 120, 144 };
         public static readonly int[] AutosaveChoices = { 0, 2, 5, 10 };
@@ -44,6 +46,7 @@ namespace AntSim
             ShowStats = GetBool("ShowStats", true);
             PauseInMenu = GetBool("PauseInMenu", true);
             AutosaveMinutes = PlayerPrefs.GetInt(Prefix + "AutosaveMinutes", 5);
+            CheckUpdates = GetBool("CheckUpdates", true);
         }
 
         public static void Save()
@@ -58,6 +61,7 @@ namespace AntSim
             SetBool("ShowStats", ShowStats);
             SetBool("PauseInMenu", PauseInMenu);
             PlayerPrefs.SetInt(Prefix + "AutosaveMinutes", AutosaveMinutes);
+            SetBool("CheckUpdates", CheckUpdates);
             PlayerPrefs.Save();
         }
 
@@ -89,6 +93,7 @@ namespace AntSim
             PanSpeed = 1.2f; ZoomSpeed = 1f; EdgePan = false;
             UiScaleOffset = 0f; ShowStats = true; PauseInMenu = true;
             AutosaveMinutes = 5;
+            CheckUpdates = true;
             Save();
             Apply();
         }
@@ -163,6 +168,12 @@ namespace AntSim
             foreach (int m in AutosaveChoices)
                 if (ui.Button(m == 0 ? "Off" : $"Every {m} min", AutosaveMinutes == m ? s.ButtonOn : s.Button)) { AutosaveMinutes = m; changed = true; }
             ui.EndRow();
+
+            ui.Space(8);
+            ui.Label("Updates", s.Header);
+            bool upd = ui.Toggle(CheckUpdates, "Check for a new version on the start screen (asks GitHub, nothing is downloaded)", s.Toggle);
+            if (upd != CheckUpdates) { CheckUpdates = upd; changed = true; }
+            ui.Label($"This is version {Application.version}.", s.Small);
 
             ui.Space(10);
             bool back = false;

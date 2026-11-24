@@ -75,6 +75,7 @@ namespace AntSim
             cam.clearFlags = CameraClearFlags.SolidColor;
 
             GameSettings.Load();
+            UpdateCheck.Begin();
             MakeStyles();
             ui = UiKit.Create(transform, "Menu", 20);
             background = ui.CreatePanel("Background", Vector2.zero, Vector2.zero, new Color(0.05f, 0.05f, 0.07f, 1f),
@@ -144,6 +145,13 @@ namespace AntSim
             if (ui.Button("Settings", button, 100)) pageShown = Page.Settings;
             if (ui.Button("Quit", button, 70)) pageShown = Page.ConfirmQuit;
             ui.EndRow();
+            if (UpdateCheck.NewerVersion != null)
+            {
+                ui.BeginRow();
+                ui.Label($"<b>A new version is out: {UpdateCheck.NewerVersion}</b> (you have {Application.version}).", label);
+                if (ui.Button("Download", buttonOn, 120)) Application.OpenURL(UpdateCheck.DownloadUrl);
+                ui.EndRow();
+            }
             ui.Label("Raise a colony from a single queen. Find food, farm aphids and fungus, hunt bugs, " +
                      "and outlast the rival colonies.", small);
             if (!string.IsNullOrEmpty(message)) ui.Label(message, error);
