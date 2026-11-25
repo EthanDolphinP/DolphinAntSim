@@ -10,12 +10,14 @@
   3. Zips it as Builds\DolphinAntSimulator-v1.2-Windows.zip (without the Burst debug folder)
   4. Commits the version change, tags it v1.2 and pushes to GitHub
   5. Creates the GitHub release v1.2 with the zip attached
+  6. Posts it to Discord and pings the Antvester role (announce.ps1; skipped if not set up, or with -NoDiscord)
 
   Needs GitHub CLI signed in once:  gh auth login
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Version,
-    [string]$Notes = ""
+    [string]$Notes = "",
+    [switch]$NoDiscord
 )
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
@@ -91,3 +93,10 @@ if ($Notes) { $ghArgs += @("--notes", $Notes) } else { $ghArgs += "--generate-no
 & $gh @ghArgs
 if ($LASTEXITCODE -ne 0) { Fail "gh release create failed (the tag is pushed; you can retry: gh release create $tag $zip)" }
 Write-Host "`nDone: https://github.com/EthanDolphinP/DolphinAntSim/releases/tag/$tag" -ForegroundColor Green
+
+# ---- discord
+if (-not $NoDiscord -and (Test-Path "announce.local.json")) {
+    Step "Announcing on Discord"
+    & (Join-Path $PSScriptRoot "announce.ps1") $Version
+    if ($LASTEXITCODE -ne 0) { Write-Host "The release is out; retry the announcement with: .\announce.ps1 $Version" -ForegroundColor Yellow }
+}

@@ -25,12 +25,28 @@ The game lands in `Builds/Windows`. Zip that folder (leave out the `*_BurstDebug
 With [GitHub CLI](https://cli.github.com/) signed in once (`gh auth login`), close the project in Unity and run:
 
 ```
-.elease.ps1 1.2 "What's new in this version"
+.\release.ps1 1.2 "What's new in this version"
 ```
 
 It sets the version, builds the .exe, zips it, commits and tags `v1.2`, pushes, and publishes the GitHub release with the zip attached. Leave out the notes to have GitHub list the commits instead.
 
 **Update notice:** the start screen asks GitHub for the latest release once per run. If it's newer than the running version, it says so and offers a **Download** button that opens the release page. Nothing is downloaded or replaced automatically, and the check can be turned off in Settings.
+
+### Discord announcements
+
+`release.ps1` can post each release to a Discord channel (for example `#ant-updates`) and ping a role (for example `@Antvester`). One-time setup:
+
+1. In Discord, open the channel's settings: **Integrations > Webhooks > New Webhook**, name it, and **Copy Webhook URL**.
+2. Turn on **User Settings > Advanced > Developer Mode**, then in **Server Settings > Roles** right-click the role and **Copy Role ID**.
+3. Make `announce.local.json` next to `release.ps1` (it's in `.gitignore`; the webhook link lets anyone post, so keep it out of git):
+
+   ```json
+   { "webhook": "https://discord.com/api/webhooks/...", "roleId": "123456789012345678" }
+   ```
+
+4. Check it with `.\announce.ps1 -Test` (posts a test line, no ping).
+
+After that every `release.ps1` run announces the release with the notes and a download link. Use `-NoDiscord` to skip it, or `.\announce.ps1 1.2` (`-NoPing` for a quiet post) to announce an existing release by hand.
 
 ## Running it in the editor
 

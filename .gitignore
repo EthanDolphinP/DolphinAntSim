@@ -51,3 +51,6 @@ crashlytics-build.properties
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Discord webhook for announce.ps1 (secret)
+announce.local.json
