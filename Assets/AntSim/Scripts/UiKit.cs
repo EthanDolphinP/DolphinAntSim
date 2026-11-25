@@ -18,6 +18,11 @@ namespace AntSim
         public Color Pressed = Color.clear;
         public float Height;              // minimum height (0 = from the text)
         public RectOffset Padding = new RectOffset(4, 4, 2, 2);
+        public Color Border = Color.clear;      // 1-unit outline (clear = none)
+        public Color HoverBorder = Color.clear; // outline under the mouse (clear = as Border)
+        public Color HoverText = Color.clear;   // text colour under the mouse (clear = as Text)
+        public float Radius;                    // rounded corners
+        public bool Upper;                      // shown in capitals
 
         public UiStyle Copy() => (UiStyle)MemberwiseClone();
     }
@@ -77,7 +82,7 @@ namespace AntSim
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ConstantPixelSize;
             gameObject.AddComponent<GraphicRaycaster>();
             Root = (RectTransform)transform;
-            Font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            Font = SharedFont();
 
             if (EventSystem.current == null && FindObjectOfType<EventSystem>() == null)
             {
@@ -90,6 +95,80 @@ namespace AntSim
                 whiteSprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f,
                     0, SpriteMeshType.FullRect, new Vector4(1, 1, 1, 1));
             }
+        }
+
+        static Font font;
+
+        /// <summary>Consolas (as Dolphin City Builder), or Unity's own font where the system has none of these.</summary>
+        static Font SharedFont()
+        {
+            if (font != null) return font;
+            try
+            {
+                var installed = new HashSet<string>(Font.GetOSInstalledFontNames());
+                foreach (var name in new[] { "Consolas", "Cascadia Mono", "Courier New" })
+                    if (installed.Contains(name)) { font = Font.CreateDynamicFontFromOSFont(name, 16); break; }
+            }
+            catch { font = null; }
+            if (font == null) font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            return font;
+        }
+
+        // ------------------------------------------------------------------ rounded shapes
+
+        const int Supersample = 4;   // sprite texels per UI unit
+        static readonly Dictionary<int, Sprite> fills = new Dictionary<int, Sprite>(), rings = new Dictionary<int, Sprite>();
+
+        /// <summary>A 9-sliced rounded rectangle (filled, or just its 1-unit outline) for a corner radius in UI units.</summary>
+        static Sprite Rounded(float radius, bool ring)
+        {
+            int r = Mathf.Clamp(Mathf.RoundToInt(radius), 0, 32);
+            if (r == 0 && !ring) return whiteSprite;
+            var cache = ring ? rings : fills;
+            if (cache.TryGetValue(r, out var sp) && sp != null) return sp;
+            int R = r * Supersample, T = Supersample;            // radius and line width in texels
+            int B = Mathf.Max(R, T) + 2;                         // slice border
+            int N = 2 * B + 2;
+            var tex = new Texture2D(N, N, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear };
+            var px = new Color32[N * N];
+            float h = N * 0.5f;
+            for (int y = 0; y < N; y++)
+                for (int x = 0; x < N; x++)
+                {
+                    float qx = Mathf.Abs(x + 0.5f - h) - (h - R), qy = Mathf.Abs(y + 0.5f - h) - (h - R);
+                    float d = new Vector2(Mathf.Max(qx, 0f), Mathf.Max(qy, 0f)).magnitude + Mathf.Min(Mathf.Max(qx, qy), 0f) - R;
+                    float a = Mathf.Clamp01(0.5f - d);
+                    if (ring) a -= Mathf.Clamp01(0.5f - (d + T));
+                    px[y * N + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(Mathf.Clamp01(a) * 255f));
+                }
+            tex.SetPixels32(px);
+            tex.Apply(false, true);
+            sp = Sprite.Create(tex, new Rect(0, 0, N, N), new Vector2(0.5f, 0.5f), 100f * Supersample, 0, SpriteMeshType.FullRect, new Vector4(B, B, B, B));
+            cache[r] = sp;
+            return sp;
+        }
+
+        static void Shape(Image img, float radius, bool ring, Color color)
+        {
+            var sp = Rounded(radius, ring);
+            if (img.sprite != sp)
+            {
+                img.sprite = sp;
+                img.type = sp == whiteSprite ? Image.Type.Simple : Image.Type.Sliced;
+                img.pixelsPerUnitMultiplier = 1f; // the sprite has Supersample texels per unit, so its preferred size stays small
+            }
+            if (img.color != color) img.color = color;
+        }
+
+        /// <summary>An outline drawn over a box, outside the layout.</summary>
+        static Image AddRing(GameObject go)
+        {
+            var r = Child(go, "Border", Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            r.AddComponent<LayoutElement>().ignoreLayout = true;
+            var img = r.AddComponent<Image>();
+            img.raycastTarget = false;
+            img.color = Color.clear;
+            return img;
         }
 
         void LateUpdate()
@@ -109,6 +188,7 @@ namespace AntSim
         {
             public RectTransform Rect;
             public Image Background;
+            public Image Ring;
             internal Container Body;
             public bool Visible { get => Rect.gameObject.activeSelf; set { if (Rect.gameObject.activeSelf != value) Rect.gameObject.SetActive(value); } }
         }
@@ -118,7 +198,8 @@ namespace AntSim
         /// With vertical = false its elements go left to right (a toolbar).
         /// </summary>
         public Panel CreatePanel(string name, Vector2 anchor, Vector2 pivot, Color background, RectOffset padding,
-            bool vertical = true, bool fitHeight = true, bool fitWidth = false, bool draggable = false)
+            bool vertical = true, bool fitHeight = true, bool fitWidth = false, bool draggable = false,
+            Color border = default, float radius = 0f)
         {
             var go = new GameObject(name, typeof(RectTransform));
             go.transform.SetParent(Root, false);
@@ -126,9 +207,10 @@ namespace AntSim
             rt.anchorMin = rt.anchorMax = anchor;
             rt.pivot = pivot;
             var img = go.AddComponent<Image>();
-            img.sprite = whiteSprite;
-            img.color = background;
+            Shape(img, radius, false, background);
             img.raycastTarget = background.a > 0f;
+            var ring = AddRing(go);
+            Shape(ring, radius, true, border);
             HorizontalOrVerticalLayoutGroup g = vertical ? go.AddComponent<VerticalLayoutGroup>() : go.AddComponent<HorizontalLayoutGroup>();
             Configure(g, padding, 4f);
             if (!vertical) g.childAlignment = TextAnchor.MiddleLeft;
@@ -139,7 +221,15 @@ namespace AntSim
                 if (fitWidth) fit.horizontalFit = ContentSizeFitter.FitMode.PreferredSize;
             }
             if (draggable) go.AddComponent<UiDrag>().Target = rt;
-            return new Panel { Rect = rt, Background = img, Body = new Container { Rect = rt, Group = g, Vertical = vertical } };
+            return new Panel { Rect = rt, Background = img, Ring = ring, Body = new Container { Rect = rt, Group = g, Vertical = vertical } };
+        }
+
+        /// <summary>Changes a panel's colours and corners.</summary>
+        public static void SetLook(Panel p, Color background, Color border, float radius)
+        {
+            Shape(p.Background, radius, false, background);
+            p.Background.raycastTarget = background.a > 0f;
+            Shape(p.Ring, radius, true, border);
         }
 
         static void Configure(HorizontalOrVerticalLayoutGroup g, RectOffset padding, float spacing)
@@ -155,7 +245,7 @@ namespace AntSim
 
         // ------------------------------------------------------------------ immediate API
 
-        internal enum Kind { Label, Button, Slider, Toggle, Input, Space, Flex, Row, Scroll, Swatch, Column }
+        internal enum Kind { Label, Button, Slider, Toggle, Input, Space, Flex, Row, Scroll, Swatch, Column, Box, Stat }
 
         internal class Container
         {
@@ -171,15 +261,16 @@ namespace AntSim
             public Kind Kind;
             public RectTransform Rect;
             public LayoutElement Layout;
-            public Text Text;
-            public Image Image;
+            public Text Text, Text2;
+            public Image Image, Ring;
+            public UiHover Hover;
             public Button Button;
             public Slider Slider;
             public Toggle Toggle;
             public InputField Input;
             public ScrollRect Scroll;
             public Container Child;
-            public UiStyle Style;
+            public UiStyle Style, Style2;
             public bool Clicked, Changed;
             public bool Syncing; // the code (not the user) is changing the widget: ignore its change events
             public float Value;
@@ -254,6 +345,10 @@ namespace AntSim
             ApplyText(n, text, style);
             ApplyBackground(n, style);
             SetWidth(n, width, 1f);
+            bool hot = n.Hover != null && n.Hover.Over && n.Button.interactable;
+            Shape(n.Ring, style.Radius, true, hot && style.HoverBorder.a > 0f ? style.HoverBorder : style.Border);
+            var tc = hot && style.HoverText.a > 0f ? style.HoverText : style.Text;
+            if (n.Text.color != tc) n.Text.color = tc;
             bool clicked = n.Clicked;
             n.Clicked = false;
             return clicked;
@@ -264,8 +359,8 @@ namespace AntSim
         {
             var n = Next(Kind.Swatch);
             var inner = (Image)n.Rect.GetChild(0).GetComponent<Image>();
-            inner.color = color;
-            n.Image.color = selected ? Color.white : new Color(1f, 1f, 1f, 0.08f);
+            Shape(inner, size * 0.18f, false, color);
+            Shape(n.Image, size * 0.25f, false, selected ? Color.white : new Color(1f, 1f, 1f, 0.08f));
             n.Layout.preferredWidth = n.Layout.minWidth = size;
             n.Layout.preferredHeight = n.Layout.minHeight = size;
             n.Layout.flexibleWidth = 0f;
@@ -367,6 +462,52 @@ namespace AntSim
 
         public void EndScroll() => Close(stack.Pop());
 
+        /// <summary>A panel inside the page (background, outline, padding from the style) until EndBox.</summary>
+        public void BeginBox(UiStyle style)
+        {
+            var n = Next(Kind.Box);
+            if (n.Style != style)
+            {
+                n.Style = style;
+                Shape(n.Image, style.Radius, false, style.Background);
+                Shape(n.Ring, style.Radius, true, style.Border);
+                n.Child.Group.padding = style.Padding;
+            }
+            n.Child.Cursor = 0;
+            stack.Push(n.Child);
+        }
+
+        public void EndBox() => Close(stack.Pop());
+
+        /// <summary>A number tile: a small label over a value.</summary>
+        public void Stat(string key, string value, UiStyle box, UiStyle keyStyle, UiStyle valueStyle, float width = -1f)
+        {
+            var n = Next(Kind.Stat);
+            if (n.Style != box)
+            {
+                n.Style = box;
+                Shape(n.Image, box.Radius, false, box.Background);
+                Shape(n.Ring, box.Radius, true, box.Border);
+                n.Rect.GetComponent<VerticalLayoutGroup>().padding = box.Padding;
+            }
+            SetTextLook(n.Text, keyStyle);
+            SetTextLook(n.Text2, valueStyle);
+            if (keyStyle.Upper && key != null && key.IndexOf('<') < 0) key = key.ToUpperInvariant();
+            if (n.Text.text != key) n.Text.text = key;
+            if (n.Text2.text != value) n.Text2.text = value;
+            SetWidth(n, width, Current.Vertical ? 1f : 0f);
+        }
+
+        static void SetTextLook(Text t, UiStyle s)
+        {
+            if (t.fontSize != s.FontSize) t.fontSize = s.FontSize;
+            if (t.fontStyle != s.FontStyle) t.fontStyle = s.FontStyle;
+            if (t.color != s.Text) t.color = s.Text;
+            if (t.alignment != s.Align) t.alignment = s.Align;
+            var wrap = s.Wrap ? HorizontalWrapMode.Wrap : HorizontalWrapMode.Overflow;
+            if (t.horizontalOverflow != wrap) t.horizontalOverflow = wrap;
+        }
+
         // ------------------------------------------------------------------ building
 
         Node Build(Kind kind, Container parent)
@@ -389,9 +530,38 @@ namespace AntSim
                     n.Button.onClick.AddListener(() => n.Clicked = true);
                     var g = go.AddComponent<VerticalLayoutGroup>();
                     Configure(g, new RectOffset(8, 8, 4, 4), 0f);
+                    g.childAlignment = TextAnchor.MiddleCenter; // text in the middle of a button taller than it
                     var t = new GameObject("Text", typeof(RectTransform));
                     t.transform.SetParent(go.transform, false);
                     n.Text = AddText(t);
+                    n.Ring = AddRing(go);
+                    n.Hover = go.AddComponent<UiHover>();
+                    break;
+                }
+                case Kind.Box:
+                {
+                    n.Image = go.AddComponent<Image>();
+                    n.Image.raycastTarget = false;
+                    n.Ring = AddRing(go);
+                    var g = go.AddComponent<VerticalLayoutGroup>();
+                    Configure(g, new RectOffset(0, 0, 0, 0), 4f);
+                    n.Child = new Container { Rect = n.Rect, Group = g, Vertical = true };
+                    n.Layout.flexibleWidth = 1f;
+                    break;
+                }
+                case Kind.Stat:
+                {
+                    n.Image = go.AddComponent<Image>();
+                    n.Image.raycastTarget = false;
+                    n.Ring = AddRing(go);
+                    var g = go.AddComponent<VerticalLayoutGroup>();
+                    Configure(g, new RectOffset(0, 0, 0, 0), 0f);
+                    var k = new GameObject("Key", typeof(RectTransform));
+                    k.transform.SetParent(go.transform, false);
+                    n.Text = AddText(k);
+                    var v = new GameObject("Value", typeof(RectTransform));
+                    v.transform.SetParent(go.transform, false);
+                    n.Text2 = AddText(v);
                     break;
                 }
                 case Kind.Swatch:
@@ -451,6 +621,7 @@ namespace AntSim
 
         void ApplyText(Node n, string text, UiStyle s)
         {
+            if (s.Upper && text != null && text.IndexOf('<') < 0) text = text.ToUpperInvariant();
             if (n.Text.text != text) n.Text.text = text;
             if (n.Style == s) return;
             n.Style = s;
@@ -470,8 +641,9 @@ namespace AntSim
         {
             if (n.Image == null || n.Button == null) return;
             var cb = n.Button.colors;
-            if (cb.normalColor == s.Background && cb.highlightedColor == s.Hover) return;
-            n.Image.color = Color.white;
+            if (n.Style2 == s) return;
+            n.Style2 = s;
+            Shape(n.Image, s.Radius, false, Color.white);
             cb.normalColor = s.Background;
             cb.highlightedColor = s.Hover.a > 0f ? s.Hover : s.Background;
             cb.selectedColor = s.Background;
@@ -488,13 +660,13 @@ namespace AntSim
             n.Layout.minHeight = n.Layout.preferredHeight = 20f;
             n.Layout.flexibleWidth = 1f;
             var bg = Child(go, "Background", new Vector2(0, 0.5f), new Vector2(1, 0.5f), new Vector2(0, -3), new Vector2(0, 3));
-            var bgImg = bg.AddComponent<Image>(); bgImg.sprite = whiteSprite; bgImg.color = new Color(0.22f, 0.22f, 0.27f);
+            var bgImg = bg.AddComponent<Image>(); Shape(bgImg, 3f, false, UiTheme.Line);
             var fillArea = Child(go, "Fill Area", new Vector2(0, 0.5f), new Vector2(1, 0.5f), new Vector2(0, -3), new Vector2(-8, 3));
             var fill = Child(fillArea, "Fill", Vector2.zero, new Vector2(0, 1), Vector2.zero, new Vector2(8, 0));
-            var fillImg = fill.AddComponent<Image>(); fillImg.sprite = whiteSprite; fillImg.color = new Color(0.36f, 0.52f, 0.78f);
+            var fillImg = fill.AddComponent<Image>(); Shape(fillImg, 3f, false, UiTheme.Accent);
             var handleArea = Child(go, "Handle Area", Vector2.zero, Vector2.one, new Vector2(7, 0), new Vector2(-7, 0));
-            var handle = Child(handleArea, "Handle", Vector2.zero, new Vector2(0, 1), new Vector2(-7, 2), new Vector2(7, -2));
-            var hImg = handle.AddComponent<Image>(); hImg.sprite = whiteSprite; hImg.color = new Color(0.9f, 0.92f, 0.96f);
+            var handle = Child(handleArea, "Handle", Vector2.zero, new Vector2(0, 1), new Vector2(-8, 2), new Vector2(8, -2));
+            var hImg = handle.AddComponent<Image>(); Shape(hImg, 8f, false, UiTheme.Bright);
             n.Slider = go.AddComponent<Slider>();
             n.Slider.fillRect = (RectTransform)fill.transform;
             n.Slider.handleRect = (RectTransform)handle.transform;
@@ -514,9 +686,10 @@ namespace AntSim
             box.transform.SetParent(go.transform, false);
             var boxLe = box.AddComponent<LayoutElement>();
             boxLe.minWidth = boxLe.preferredWidth = 18f; boxLe.minHeight = boxLe.preferredHeight = 18f;
-            var boxImg = box.AddComponent<Image>(); boxImg.sprite = whiteSprite; boxImg.color = new Color(0.22f, 0.22f, 0.27f);
+            var boxImg = box.AddComponent<Image>(); Shape(boxImg, 4f, false, UiTheme.Inset);
+            Shape(AddRing(box), 4f, true, UiTheme.Line);
             var check = Child(box, "Check", Vector2.zero, Vector2.one, new Vector2(4, 4), new Vector2(-4, -4));
-            var checkImg = check.AddComponent<Image>(); checkImg.sprite = whiteSprite; checkImg.color = new Color(0.5f, 0.72f, 1f);
+            var checkImg = check.AddComponent<Image>(); Shape(checkImg, 2f, false, UiTheme.Accent);
             var label = new GameObject("Label", typeof(RectTransform));
             label.transform.SetParent(go.transform, false);
             n.Text = AddText(label);
@@ -532,12 +705,13 @@ namespace AntSim
         void BuildInput(Node n, GameObject go)
         {
             n.Layout.minHeight = n.Layout.preferredHeight = 32f;
-            var img = go.AddComponent<Image>(); img.sprite = whiteSprite; img.color = new Color(0.16f, 0.16f, 0.2f);
+            var img = go.AddComponent<Image>(); Shape(img, UiTheme.ButtonRadius, false, UiTheme.Inset);
+            Shape(AddRing(go), UiTheme.ButtonRadius, true, UiTheme.Line);
             var textGo = Child(go, "Text", Vector2.zero, Vector2.one, new Vector2(8, 2), new Vector2(-8, -2));
             n.Text = AddText(textGo);
             n.Text.supportRichText = false;
             n.Text.alignment = TextAnchor.MiddleLeft;
-            n.Text.color = new Color(0.95f, 0.95f, 0.97f);
+            n.Text.color = UiTheme.Bright;
             n.Input = go.AddComponent<InputField>();
             n.Input.textComponent = n.Text;
             n.Input.targetGraphic = img;
@@ -562,10 +736,11 @@ namespace AntSim
             content.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
             var bar = Child(go, "Scrollbar", new Vector2(1, 0), Vector2.one, new Vector2(-6, 0), Vector2.zero);
-            var barImg = bar.AddComponent<Image>(); barImg.sprite = whiteSprite; barImg.color = new Color(1, 1, 1, 0.05f);
+            var barImg = bar.AddComponent<Image>(); barImg.sprite = whiteSprite; barImg.color = new Color(1, 1, 1, 0.001f);
             var area = Child(bar, "Sliding Area", Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
             var handle = Child(area, "Handle", Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-            var hImg = handle.AddComponent<Image>(); hImg.sprite = whiteSprite; hImg.color = new Color(1, 1, 1, 0.25f);
+            var hImg = handle.AddComponent<Image>();
+            Shape(hImg, 3f, false, new Color(UiTheme.Dim.r, UiTheme.Dim.g, UiTheme.Dim.b, 0.55f));
             var sb = bar.AddComponent<Scrollbar>();
             sb.handleRect = (RectTransform)handle.transform;
             sb.targetGraphic = hImg;
@@ -592,6 +767,15 @@ namespace AntSim
             rt.offsetMin = offsetMin; rt.offsetMax = offsetMax;
             return go;
         }
+    }
+
+    /// <summary>Remembers whether the mouse is over a button (for its hover outline and text colour).</summary>
+    public class UiHover : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler
+    {
+        public bool Over;
+        public void OnPointerEnter(PointerEventData e) => Over = true;
+        public void OnPointerExit(PointerEventData e) => Over = false;
+        void OnDisable() => Over = false;
     }
 
     /// <summary>Drag a panel around by its background.</summary>

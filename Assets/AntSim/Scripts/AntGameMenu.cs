@@ -27,11 +27,11 @@ namespace AntSim
         string message;
 
         UiKit ui;
-        UiKit.Panel background, page;
+        UiKit.Panel background, top, page;
         List<SaveSlot> saves;
         bool showAllSaves;
         string confirmDelete;
-        UiStyle title, header, label, small, error, button, buttonOn, card, cardOn, field, toggle;
+        UiStyle title, pageTitle, header, label, small, error, button, buttonOn, card, cardOn, field, toggle, box, notice;
         enum Page { Main, Settings, ConfirmQuit }
         Page pageShown;
         GameSettings.Styles settingsStyles;
@@ -71,22 +71,30 @@ namespace AntSim
                 cam.tag = "MainCamera";
                 cam.orthographic = true;
             }
-            cam.backgroundColor = new Color(0.04f, 0.04f, 0.05f);
+            cam.backgroundColor = UiTheme.Bg;
             cam.clearFlags = CameraClearFlags.SolidColor;
 
             GameSettings.Load();
             UpdateCheck.Begin();
             MakeStyles();
             ui = UiKit.Create(transform, "Menu", 20);
-            background = ui.CreatePanel("Background", Vector2.zero, Vector2.zero, new Color(0.05f, 0.05f, 0.07f, 1f),
+            background = ui.CreatePanel("Background", Vector2.zero, Vector2.zero, UiTheme.Bg,
                 new RectOffset(0, 0, 0, 0), fitHeight: false);
             background.Rect.anchorMin = Vector2.zero;
             background.Rect.anchorMax = Vector2.one;
             background.Rect.offsetMin = background.Rect.offsetMax = Vector2.zero;
+            top = ui.CreatePanel("Top bar", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), UiTheme.Panel,
+                new RectOffset(24, 24, 8, 8), vertical: false, fitHeight: false, border: UiTheme.Line);
+            top.Rect.anchorMin = new Vector2(0f, 1f);
+            top.Rect.anchorMax = new Vector2(1f, 1f);
+            top.Rect.sizeDelta = new Vector2(2f, TopHeight + 1f);
+            top.Rect.anchoredPosition = new Vector2(0f, 1f);
             page = ui.CreatePanel("Page", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), Color.clear,
                 new RectOffset(0, 0, 0, 0));
             saves = AntWorld.ListSaves();
         }
+
+        const float TopHeight = 54f;
 
         void StartGame()
         {
@@ -112,60 +120,73 @@ namespace AntSim
             }
             ui.Scale = Mathf.Clamp(Mathf.Min(Screen.height / 900f, Screen.width / 1100f) + GameSettings.UiScaleOffset, 0.6f, 3f);
             Vector2 v = ui.VirtualSize;
-            float w = Mathf.Min(760f, v.x - 20f);
+            float w = Mathf.Min(820f, v.x - 24f);
             page.Rect.sizeDelta = new Vector2(w, page.Rect.sizeDelta.y);
-            page.Rect.anchoredPosition = new Vector2(0f, -10f);
+            page.Rect.anchoredPosition = new Vector2(0f, -(TopHeight + 14f));
+
+            ui.Begin(top);
+            ui.Label("Dolphin Ant Simulator", title);
+            ui.Label($"v{Application.version}", small);
+            ui.FlexibleSpace();
+            if (ui.Button("New game", pageShown == Page.Main ? buttonOn : button, 120)) pageShown = Page.Main;
+            if (ui.Button("Settings", pageShown == Page.Settings ? buttonOn : button, 110)) pageShown = Page.Settings;
+            if (ui.Button("Quit", pageShown == Page.ConfirmQuit ? buttonOn : button, 80)) pageShown = Page.ConfirmQuit;
+            ui.End();
 
             ui.Begin(page);
-            ui.BeginScroll(v.y - 20f);
+            ui.BeginScroll(v.y - TopHeight - 24f);
             if (pageShown == Page.Settings)
             {
-                ui.Label("Settings", title);
+                ui.BeginBox(box);
+                ui.Label("Settings", pageTitle);
                 if (GameSettings.Draw(ui, settingsStyles)) pageShown = Page.Main;
+                ui.EndBox();
             }
             else if (pageShown == Page.ConfirmQuit)
             {
-                ui.Label("Quit to desktop?", title);
+                ui.BeginBox(box);
+                ui.Label("Quit to desktop?", pageTitle);
                 ui.BeginRow();
                 if (ui.Button("Quit", buttonOn, 160)) GameSettings.QuitToDesktop();
                 if (ui.Button("Cancel", button, 160)) pageShown = Page.Main;
                 ui.FlexibleSpace();
                 ui.EndRow();
+                ui.EndBox();
             }
             else DrawPage();
+            ui.Space(10);
             ui.EndScroll();
             ui.End();
         }
 
         void DrawPage()
         {
-            ui.BeginRow();
-            ui.Label("Dolphin Ant Simulator", title);
-            if (ui.Button("Start", buttonOn, 110)) { StartGame(); return; }
-            if (ui.Button("Settings", button, 100)) pageShown = Page.Settings;
-            if (ui.Button("Quit", button, 70)) pageShown = Page.ConfirmQuit;
-            ui.EndRow();
             if (UpdateCheck.NewerVersion != null)
             {
+                ui.BeginBox(notice);
                 ui.BeginRow();
-                ui.Label($"<b>A new version is out: {UpdateCheck.NewerVersion}</b> (you have {Application.version}).", label);
+                ui.Label($"<b><color={UiTheme.AccentHex}>A new version is out: {UpdateCheck.NewerVersion}</color></b>  " +
+                         $"<color={UiTheme.DimHex}>(you have {Application.version})</color>", label);
                 if (ui.Button("Download", buttonOn, 120)) Application.OpenURL(UpdateCheck.DownloadUrl);
                 ui.EndRow();
+                ui.EndBox();
+                ui.Space(6);
             }
             ui.Label("Raise a colony from a single queen. Find food, farm aphids and fungus, hunt bugs, " +
                      "and outlast the rival colonies.", small);
             if (!string.IsNullOrEmpty(message)) ui.Label(message, error);
+            ui.Space(6);
 
             if (saves.Count > 0)
             {
-                ui.Space(8);
+                ui.BeginBox(box);
                 ui.Label("Saved games", header);
                 int shown = showAllSaves ? saves.Count : Mathf.Min(3, saves.Count);
                 for (int i = 0; i < shown; i++)
                 {
                     var s = saves[i];
                     ui.BeginRow();
-                    ui.Label($"<b>{s.Name}</b>   <color=#9fb0c8>{s.Written:MMM d, HH:mm}</color>\n<color=#9fb0c8>{s.Summary}</color>", small);
+                    ui.Label($"<b>{s.Name}</b>   <color=#7d8a84>{s.Written:MMM d, HH:mm}</color>\n<color=#7d8a84>{s.Summary}</color>", small);
                     if (ui.Button(i == 0 ? "Continue" : "Load", i == 0 ? buttonOn : button, 100)) { Load(s.Path); return; }
                     bool sure = confirmDelete == s.Path;
                     if (ui.Button(sure ? "Sure?" : "Delete", button, 70))
@@ -177,10 +198,12 @@ namespace AntSim
                 }
                 if (saves.Count > 3 && ui.Button(showAllSaves ? "Show fewer" : $"Show all {saves.Count} saves", button))
                     showAllSaves = !showAllSaves;
+                ui.EndBox();
+                ui.Space(10);
             }
 
-            ui.Space(10);
-            ui.Label("New game", title);
+            ui.BeginBox(box);
+            ui.Label("New game", pageTitle);
             ui.Label("Colony name", header);
             setup.ColonyName = ui.TextField(setup.ColonyName ?? "", 24, field);
 
@@ -190,7 +213,7 @@ namespace AntSim
             for (int i = 0; i < all.Length; i++)
             {
                 var sp = all[i];
-                if (ui.Button($"<b>{sp.Name}</b>\n{sp.Description}\n<color=#9fb0c8>{StatLine(sp)}</color>{CasteLine(sp)}",
+                if (ui.Button($"<b>{sp.Name}</b>\n{sp.Description}\n<color=#7d8a84>{StatLine(sp)}</color>{CasteLine(sp)}",
                         setup.Species == i ? cardOn : card))
                     setup.Species = i;
             }
@@ -243,8 +266,8 @@ namespace AntSim
                   "Win by outlasting every rival colony.", small);
 
             ui.Space(12);
-            if (ui.Button("Start", buttonOn)) { StartGame(); return; }
-            ui.Space(10);
+            if (ui.Button("Start", buttonOn)) { ui.EndBox(); StartGame(); return; }
+            ui.EndBox();
         }
 
         static string StatLine(SpeciesDef sp)
@@ -274,39 +297,34 @@ namespace AntSim
                 if (d == null) continue;
                 parts.Add($"{d.Name} ({d.Share:P0} of {(d.Base == Caste.Soldier ? "soldiers" : "workers")})");
             }
-            return $"\n<color=#d8c48a>Castes: {string.Join(", ", parts)}</color>";
+            return $"\n<color=#e6c35c>Castes: {string.Join(", ", parts)}</color>";
         }
 
         void MakeStyles()
         {
-            var text = new Color(0.92f, 0.92f, 0.94f);
-            label = new UiStyle { FontSize = 15, Text = text };
-            small = new UiStyle { FontSize = 13, Text = new Color(0.68f, 0.70f, 0.75f) };
-            error = new UiStyle { FontSize = 14, Text = new Color(1f, 0.5f, 0.45f) };
-            title = new UiStyle { FontSize = 30, FontStyle = FontStyle.Bold, Text = text };
-            header = new UiStyle { FontSize = 16, FontStyle = FontStyle.Bold, Text = text, Height = 28f, Align = TextAnchor.LowerLeft };
-            field = new UiStyle { FontSize = 16, Text = text };
-            button = new UiStyle
-            {
-                FontSize = 15, Text = text, Align = TextAnchor.MiddleCenter, Wrap = false, Height = 34f,
-                Background = new Color(0.20f, 0.20f, 0.25f), Hover = new Color(0.22f, 0.32f, 0.50f), Pressed = new Color(0.30f, 0.45f, 0.70f),
-            };
-            buttonOn = button.Copy();
-            buttonOn.FontStyle = FontStyle.Bold;
-            buttonOn.Background = buttonOn.Hover = new Color(0.30f, 0.45f, 0.70f);
-            card = new UiStyle
-            {
-                FontSize = 14, Text = text, Align = TextAnchor.UpperLeft, Wrap = true,
-                Background = new Color(0.12f, 0.12f, 0.15f), Hover = new Color(0.20f, 0.20f, 0.25f), Pressed = new Color(0.22f, 0.32f, 0.50f),
-                Padding = new RectOffset(10, 10, 8, 8),
-            };
-            toggle = new UiStyle { FontSize = 15, Text = text };
+            label = UiTheme.Label(15);
+            small = UiTheme.Small(13);
+            error = UiTheme.Label(14);
+            error.Text = UiTheme.Bad;
+            title = UiTheme.Title(21);
+            title.Wrap = false;
+            pageTitle = UiTheme.Title(19);
+            header = UiTheme.Section(12);
+            header.Height = 28f;
+            field = UiTheme.Field(16);
+            button = UiTheme.Button(15, 36f);
+            buttonOn = UiTheme.On(button);
+            card = UiTheme.Card(14);
+            cardOn = UiTheme.CardOn(card);
+            toggle = UiTheme.Label(15);
+            box = UiTheme.Box();
+            notice = UiTheme.Box();
+            notice.Background = Color.Lerp(UiTheme.Panel, UiTheme.Highlight, 0.7f);
+            notice.Border = UiTheme.Accent;
             settingsStyles = new GameSettings.Styles
             {
                 Header = header, Label = label, Small = small, Button = button, ButtonOn = buttonOn, Toggle = toggle,
             };
-            cardOn = card.Copy();
-            cardOn.Background = cardOn.Hover = new Color(0.22f, 0.32f, 0.50f);
         }
     }
 }

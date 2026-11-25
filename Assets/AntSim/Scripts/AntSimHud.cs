@@ -17,7 +17,7 @@ namespace AntSim
 
         enum Tab { Colonies, Orders, Nests, Farming, Diplomacy, Game, Help }
 
-        const float BarHeight = 34f;
+        const float BarHeight = 50f;
         const float PanelWidth = 460f;
 
         static bool panelVisible = true;
@@ -46,8 +46,8 @@ namespace AntSim
         List<SaveSlot> saves;
         float savesListedAt = -100f;
 
-        UiStyle barLabel, barLabelSmall, label, labelSmall, header, bigTitle, button, tabOn, tabOff, rowStyle, rowFocused, toggle, field,
-            menuButton, menuButtonOn;
+        UiStyle barLabel, barLabelSmall, barTitle, label, labelSmall, header, bigTitle, button, tabOn, tabOff, rowStyle, rowFocused, toggle, field,
+            menuButton, menuButtonOn, statBox, statKey, statValue;
 
         void Awake()
         {
@@ -55,27 +55,30 @@ namespace AntSim
             GameSettings.Load();
             MakeStyles();
             ui = UiKit.Create(transform, "HUD", 10);
-            bar = ui.CreatePanel("Top bar", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Color(0.06f, 0.06f, 0.08f, 0.95f),
-                new RectOffset(10, 10, 4, 4), vertical: false, fitHeight: false);
+            // Top bar across the screen (as Dolphin City Builder's): only its bottom edge shows a line.
+            bar = ui.CreatePanel("Top bar", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), UiTheme.PanelAlpha(0.97f),
+                new RectOffset(18, 18, 5, 5), vertical: false, fitHeight: false, border: UiTheme.Line);
+            bar.Body.Group.spacing = 6f;
             bar.Rect.anchorMin = new Vector2(0f, 1f);
             bar.Rect.anchorMax = new Vector2(1f, 1f);
-            bar.Rect.sizeDelta = new Vector2(0f, BarHeight);
-            bar.Rect.anchoredPosition = Vector2.zero;
-            alert = ui.CreatePanel("Alerts", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Color(0.18f, 0.08f, 0.07f, 0.92f),
-                new RectOffset(10, 10, 3, 3), vertical: false);
-            panel = ui.CreatePanel("Panel", new Vector2(0f, 1f), new Vector2(0f, 1f), new Color(0.09f, 0.09f, 0.11f, 0.95f),
-                new RectOffset(10, 10, 10, 10), draggable: true);
-            panel.Rect.anchoredPosition = new Vector2(10f, -(BarHeight + 40f));
-            dialog = ui.CreatePanel("Dialog", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Color(0.09f, 0.09f, 0.11f, 0.97f),
-                new RectOffset(16, 16, 14, 14));
+            bar.Rect.sizeDelta = new Vector2(2f, BarHeight + 1f);
+            bar.Rect.anchoredPosition = new Vector2(0f, 1f);
+            alert = ui.CreatePanel("Alerts", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
+                Color.Lerp(UiTheme.Panel, UiTheme.Bad, 0.16f), new RectOffset(12, 12, 6, 6), vertical: false,
+                border: UiTheme.Bad, radius: UiTheme.TileRadius);
+            panel = ui.CreatePanel("Panel", new Vector2(0f, 1f), new Vector2(0f, 1f), UiTheme.PanelAlpha(0.96f),
+                new RectOffset(14, 14, 12, 14), draggable: true, border: UiTheme.Line, radius: UiTheme.PanelRadius);
+            panel.Rect.anchoredPosition = new Vector2(12f, -(BarHeight + 40f));
+            dialog = ui.CreatePanel("Dialog", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), UiTheme.Panel,
+                new RectOffset(18, 18, 16, 16), border: UiTheme.Accent, radius: UiTheme.PanelRadius);
             // Esc menu: a dark full-screen layer that swallows clicks, with the menu box on top.
-            shade = ui.CreatePanel("Menu shade", Vector2.zero, Vector2.zero, new Color(0f, 0f, 0f, 0.55f),
+            shade = ui.CreatePanel("Menu shade", Vector2.zero, Vector2.zero, new Color(UiTheme.Bg.r, UiTheme.Bg.g, UiTheme.Bg.b, 0.7f),
                 new RectOffset(0, 0, 0, 0), fitHeight: false);
             shade.Rect.anchorMin = Vector2.zero;
             shade.Rect.anchorMax = Vector2.one;
             shade.Rect.offsetMin = shade.Rect.offsetMax = Vector2.zero;
-            menu = ui.CreatePanel("Menu", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Color(0.09f, 0.09f, 0.11f, 0.98f),
-                new RectOffset(18, 18, 16, 16));
+            menu = ui.CreatePanel("Menu", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), UiTheme.Panel,
+                new RectOffset(20, 20, 16, 18), border: UiTheme.Line, radius: UiTheme.PanelRadius);
             alert.Visible = false;
             dialog.Visible = false;
             shade.Visible = false;
@@ -227,18 +230,23 @@ namespace AntSim
         {
             var me = Me;
             string hex = ColorUtility.ToHtmlStringRGB(me.Color);
-            ui.Label($"<b><color=#{hex}>{me.Name}</color></b>", barLabel);
-            ui.Label($"<b>{me.Population:N0}</b> ants", barLabel);
-            string foodCol = me.Starving ? "#ff5555" : me.Food < 100f ? "#ffbb55" : "#ffd27a";
-            ui.Label($"<color={foodCol}>Food <b>{me.Food:N0}</b></color>", barLabel);
-            ui.Label(!me.HasQueen ? "<color=#ff5555>NO QUEEN</color>"
-                : me.NestCount > 1 ? $"{me.NestCount} nests, {me.Queens} queens" : $"Queen {me.QueenHealth:0} hp", barLabelSmall);
-            ui.Label(me.SwarmState == 2 ? "<color=#ffd27a>Princess in flight</color>" : "", barLabelSmall);
-            ui.Label($"Time {FormatTime(world.SimTime)}", barLabelSmall);
-            ui.Label(world.SimTime < world.PeacefulStart
-                ? $"<color=#8fdc8f>Rivals peaceful for {FormatTime(world.PeacefulStart - world.SimTime)}</color>" : "", barLabelSmall);
-            ui.Label(GameSettings.ShowStats ? $"{world.TotalAnts:N0} ants total, {world.AntCount:N0} live" : "", barLabelSmall);
-            ui.Label(GameSettings.ShowStats ? $"FPS {fpsSmoothed:0}  tick {world.LastTickMs:0.0} ms" : "", barLabelSmall);
+            ui.Label($"<color=#{hex}>\u25CF</color> {me.Name}", barTitle);
+            ui.Space(6);
+            ui.Stat("Ants", $"{me.Population:N0}", statBox, statKey, statValue, 84);
+            string foodCol = me.Starving ? UiTheme.BadHex : me.Food < 100f ? UiTheme.WarnHex : UiTheme.BrightHex;
+            ui.Stat("Food", $"<color={foodCol}>{me.Food:N0}</color>", statBox, statKey, statValue, 84);
+            if (!me.HasQueen) ui.Stat("Queen", $"<color={UiTheme.BadHex}>none</color>", statBox, statKey, statValue, 84);
+            else if (me.NestCount > 1) ui.Stat("Nests", $"{me.NestCount} <size=11><color={UiTheme.DimHex}>{me.Queens} q</color></size>", statBox, statKey, statValue, 84);
+            else ui.Stat("Queen", $"{me.QueenHealth:0} <size=11><color={UiTheme.DimHex}>hp</color></size>", statBox, statKey, statValue, 84);
+            ui.Stat("Time", FormatTime(world.SimTime), statBox, statKey, statValue, 72);
+            ui.Space(4);
+            var notes = new System.Text.StringBuilder();
+            if (me.SwarmState == 2) notes.Append($"<color={UiTheme.AccentHex}>Princess in flight</color>\n");
+            if (world.SimTime < world.PeacefulStart)
+                notes.Append($"<color={UiTheme.GoodHex}>Rivals peaceful for {FormatTime(world.PeacefulStart - world.SimTime)}</color>\n");
+            if (GameSettings.ShowStats)
+                notes.Append($"{world.TotalAnts:N0} ants total, {world.AntCount:N0} live\nFPS {fpsSmoothed:0}  tick {world.LastTickMs:0.0} ms");
+            ui.Label(notes.ToString().TrimEnd('\n'), barLabelSmall);
 
             ui.FlexibleSpace();
 
@@ -297,12 +305,12 @@ namespace AntSim
                          "Shift-click to place several. Esc to cancel.", labelSmall);
             else if (raided)
             {
-                ui.Label($"<color=#ff7766><b>{raider} is raiding your nest!</b></color>", label);
+                ui.Label($"<color=#e07a6a><b>{raider} is raiding your nest!</b></color>", label);
                 if (ui.Button("Go", button, 48)) world.LookAt(raidedAt);
             }
             else if (dying)
             {
-                ui.Label($"<color=#ff7766><b>Your ants are dying</b></color> ({me.DistressAlerts} recent deaths). " +
+                ui.Label($"<color=#e07a6a><b>Your ants are dying</b></color> ({me.DistressAlerts} recent deaths). " +
                          "Soldiers can smell it and are on their way.", labelSmall);
                 if (ui.Button("Go", button, 48)) world.LookAt(me.DistressAt);
                 if (ui.Button("Send all", button, 80)) world.OrderRaid(c, me.DistressAt);
@@ -366,30 +374,30 @@ namespace AntSim
                 string hex = ColorUtility.ToHtmlStringRGB(col.Color);
 
                 string status;
-                if (col.Extinct) status = "<color=#888888>EXTINCT</color>";
+                if (col.Extinct) status = "<color=#56605b>EXTINCT</color>";
                 else if (col.HasQueen) status = col.NestCount > 1 ? $"{col.NestCount} nests, {col.Queens} queens" : $"Queen {col.QueenHealth:0} hp";
                 else if (col.NewQueenProgress > 0f) status = $"<color=orange>NO QUEEN</color> - raising new {col.NewQueenProgress:P0}";
-                else status = "<color=#ff5555>NO QUEEN</color>";
-                if (col.Starving) status += "  <color=#ff5555>STARVING</color>";
-                if (col.BroodStarving) status += "  <color=#ff9955>larvae hungry</color>";
+                else status = "<color=#e07a6a>NO QUEEN</color>";
+                if (col.Starving) status += "  <color=#e07a6a>STARVING</color>";
+                if (col.BroodStarving) status += "  <color=#f0a05a>larvae hungry</color>";
                 if (col.RaidActive) status += col.AiRaidKind > 0 ? "  <color=orange>hunting</color>" : "  <color=orange>raiding</color>";
-                if (col.SwarmState == 1) status += "  <color=#ffd27a>raising a princess</color>";
-                if (col.SwarmState == 2) status += "  <color=#ffd27a>swarming</color>";
-                if (col.Abstract) status += "  <color=#7fb3ff>asleep (off-screen)</color>";
+                if (col.SwarmState == 1) status += "  <color=#e6c35c>raising a princess</color>";
+                if (col.SwarmState == 2) status += "  <color=#e6c35c>swarming</color>";
+                if (col.Abstract) status += "  <color=#7fb8ff>asleep (off-screen)</color>";
                 if (col.FrontLosses != null)
                 {
                     float front = 0f;
                     foreach (float x in col.FrontLosses) front += x;
-                    if (front > 0f) status += "  <color=#ff7766>border battle</color>";
+                    if (front > 0f) status += "  <color=#e07a6a>border battle</color>";
                 }
                 int wars = 0;
                 for (int o = 0; o < world.Colonies.Length; o++)
                     if (o != c && !world.Colonies[o].Extinct && world.IsAtWar(c, o)) wars++;
-                if (wars > 0 && !col.Extinct) status += $"  <color=#ff5555>{wars} war{(wars > 1 ? "s" : "")}</color>";
+                if (wars > 0 && !col.Extinct) status += $"  <color=#e07a6a>{wars} war{(wars > 1 ? "s" : "")}</color>";
 
                 string you = col.IsPlayer ? "  <color=#ffffff>(you)</color>" : "";
                 string text =
-                    $"<b><color=#{hex}>{col.Name}</color></b>{you}   <color=#9fb0c8>{world.SpeciesOf(c).Name}</color>\n" +
+                    $"<b><color=#{hex}>{col.Name}</color></b>{you}   <color=#7d8a84>{world.SpeciesOf(c).Name}</color>\n" +
                     $"Workers {col.Workers:N0}   Soldiers {col.Soldiers:N0}   Food {col.Food:N0}\n" +
                     $"Brood {col.Eggs:N0} / {col.Larvae:N0} / {col.Pupae:N0}   Garden {col.GardenLevel}   Farms {col.AphidFarms}   Lost {col.CombatDeaths:N0}\n" +
                     status;
@@ -414,7 +422,7 @@ namespace AntSim
             var f = Me;
             var sp = world.SpeciesOf(c);
             string hex = ColorUtility.ToHtmlStringRGB(f.Color);
-            ui.Label($"<color=#{hex}>{f.Name}</color> <color=#9fb0c8>({sp.Name})</color>", header);
+            ui.Label($"<color=#{hex}>{f.Name}</color> <color=#7d8a84>({sp.Name})</color>", header);
 
             ui.Label($"Soldier ratio: {f.SoldierRatio:P0}", label);
             f.SoldierRatio = ui.Slider(f.SoldierRatio, 0f, 0.6f);
@@ -506,7 +514,7 @@ namespace AntSim
                 string perk = def.Perk == MorphPerk.Gardener ? $"   garden +{Mathf.Min(100f, f.Gardeners * 0.5f):0}%"
                     : def.Perk == MorphPerk.Nurse ? $"   larva food -{Mathf.Min(35f, f.Nurses * 0.2f):0}%" : "";
                 ui.Label($"<b>{def.Name}</b> ({def.Share:P0} of {what}): {(asleep ? "~" : "")}{n:N0}{perk}\n" +
-                         $"<color=#9fb0c8>{def.Description}</color>", labelSmall);
+                         $"<color=#7d8a84>{def.Description}</color>", labelSmall);
             }
         }
 
@@ -521,10 +529,10 @@ namespace AntSim
             {
                 var n = world.GetNest(k);
                 if (n == null || n.Colony != c) continue;
-                string state = n.Founding ? "<color=#ffd27a>princess on her way</color>"
+                string state = n.Founding ? "<color=#e6c35c>princess on her way</color>"
                     : n.HasQueen ? $"queen {n.QueenHealth:0} hp"
-                    : f.Queens > 0 ? $"<color=#ff9955>no queen</color> - abandoned in {Mathf.Max(0f, sw.AbandonTime - n.QueenlessTime):0}s"
-                    : "<color=#ff5555>no queen</color>";
+                    : f.Queens > 0 ? $"<color=#f0a05a>no queen</color> - abandoned in {Mathf.Max(0f, sw.AbandonTime - n.QueenlessTime):0}s"
+                    : "<color=#e07a6a>no queen</color>";
                 string main = k == f.PrimaryNest ? " (main)" : "";
                 string ants = f.Abstract ? $"~{n.SleepShare:P0} of ants" : $"{n.Ants:N0} ants";
                 ui.BeginRow();
@@ -550,13 +558,13 @@ namespace AntSim
             }
             else if (f.SwarmState == 2)
             {
-                ui.Label($"<color=#ffd27a>The princess is flying to the new site</color> ({f.SwarmTimer:0}s).", label);
+                ui.Label($"<color=#e6c35c>The princess is flying to the new site</color> ({f.SwarmTimer:0}s).", label);
                 if (ui.Button("Go to site", button)) world.LookAt(f.SwarmTarget);
             }
             else
             {
                 string blocker = world.SwarmBlocker(c);
-                ui.Label(blocker != null ? $"<color=#ff9955>{blocker}</color>" : "", labelSmall);
+                ui.Label(blocker != null ? $"<color=#f0a05a>{blocker}</color>" : "", labelSmall);
                 ui.BeginRow();
                 if (ui.Button(world.PlacingNest ? "Cancel" : "Pick a site  [N]", world.PlacingNest ? tabOn : button))
                 {
@@ -620,7 +628,7 @@ namespace AntSim
             {
                 if (farm.Colony != c) continue;
                 ui.BeginRow();
-                string danger = farm.Eaten > 0f ? "  <color=#ff7766>beetles!</color>" : "";
+                string danger = farm.Eaten > 0f ? "  <color=#e07a6a>beetles!</color>" : "";
                 ui.Label($"({farm.Position.x:0}, {farm.Position.y:0})  {farm.Aphids:0} aphids{danger}", labelSmall);
                 if (ui.Button("Go", button, 44)) world.LookAt(farm.Position);
                 ui.EndRow();
@@ -637,7 +645,7 @@ namespace AntSim
             if (me == AntWorld.Player && f.TruceOfferFrom >= 0)
             {
                 var from = world.Colonies[f.TruceOfferFrom];
-                ui.Label($"<color=#ffd27a><b>{from.Name} offers a truce</b></color> ({Mathf.Max(0f, 60f - (world.SimTime - f.TruceOfferTime)):0}s to answer)", label);
+                ui.Label($"<color=#e6c35c><b>{from.Name} offers a truce</b></color> ({Mathf.Max(0f, 60f - (world.SimTime - f.TruceOfferTime)):0}s to answer)", label);
                 ui.BeginRow();
                 if (ui.Button("Accept", tabOn)) world.AnswerTruceOffer(true);
                 if (ui.Button("Refuse", button)) world.AnswerTruceOffer(false);
@@ -652,24 +660,24 @@ namespace AntSim
                 string name = $"<b><color=#{ColorUtility.ToHtmlStringRGB(other.Color)}>{other.Name}</color></b>";
                 if (other.Extinct)
                 {
-                    ui.Label($"{name}   <color=#888888>extinct</color>", label);
+                    ui.Label($"{name}   <color=#56605b>extinct</color>", label);
                     continue;
                 }
                 var stance = world.StanceOf(me, c);
-                string st = stance == Stance.War ? "<color=#ff5555>WAR</color>"
-                    : stance == Stance.Truce ? $"<color=#ffd27a>truce</color> ({f.TruceLeft[c]:0}s left)"
-                    : "<color=#66ff66>peace</color>";
+                string st = stance == Stance.War ? "<color=#e07a6a>WAR</color>"
+                    : stance == Stance.Truce ? $"<color=#e6c35c>truce</color> ({f.TruceLeft[c]:0}s left)"
+                    : "<color=#7fc97f>peace</color>";
                 float theirs = world.OpinionOf(c, me);
                 string mood = $"{AntWorld.OpinionWord(theirs)} toward you ({theirs:+0;-0;0})";
                 float contact = world.ContactBetween(me, c);
-                string border = contact > 0.6f ? "<color=#ff9955>territories overlap a lot</color>"
-                    : contact > 0f ? "<color=#ffbb55>territories touch</color>" : "no shared border";
+                string border = contact > 0.6f ? "<color=#f0a05a>territories overlap a lot</color>"
+                    : contact > 0f ? "<color=#f0a05a>territories touch</color>" : "no shared border";
                 string losses = "";
                 if (f.LossesTo != null && other.LossesTo != null && (f.LossesTo[c] >= 1f || other.LossesTo[me] >= 1f))
                     losses = $"\nRecent losses: yours {f.LossesTo[c]:0}, theirs {other.LossesTo[me]:0}";
                 if (f.FrontLosses != null && other.FrontLosses != null && (f.FrontLosses[c] > 0f || other.FrontLosses[me] > 0f))
-                    losses += "  <color=#ff7766>(fighting at the border)</color>";
-                ui.Label($"{name}   {st}   <color=#9fb0c8>{world.SpeciesOf(c).Name}, {other.Soldiers:N0} soldiers</color>\n" +
+                    losses += "  <color=#e07a6a>(fighting at the border)</color>";
+                ui.Label($"{name}   {st}   <color=#7d8a84>{world.SpeciesOf(c).Name}, {other.Soldiers:N0} soldiers</color>\n" +
                          $"They are {mood}. {border}.{losses}", labelSmall);
                 ui.BeginRow();
                 if (stance == Stance.War)
@@ -692,7 +700,7 @@ namespace AntSim
                 var s2 = world.StanceOf(a, b);
                 if (s2 == Stance.Peace) continue;
                 bool front = world.Colonies[a].FrontLosses != null && (world.Colonies[a].FrontLosses[b] > 0f || world.Colonies[b].FrontLosses[a] > 0f);
-                wars += $"{world.Colonies[a].Name} and {world.Colonies[b].Name}: {(s2 == Stance.War ? "<color=#ff5555>war</color>" : "<color=#ffd27a>truce</color>")}" +
+                wars += $"{world.Colonies[a].Name} and {world.Colonies[b].Name}: {(s2 == Stance.War ? "<color=#e07a6a>war</color>" : "<color=#e6c35c>truce</color>")}" +
                         (front ? " (border battle)" : "") + "\n";
             }
             ui.Space(6);
@@ -739,7 +747,7 @@ namespace AntSim
             if (saves.Count == 0) ui.Label("No saves yet.", labelSmall);
             foreach (var s in saves)
             {
-                ui.Label($"<b>{s.Name}</b>   <color=#9fb0c8>{s.Written:MMM d, HH:mm}</color>\n<color=#9fb0c8>{s.Summary}</color>", labelSmall);
+                ui.Label($"<b>{s.Name}</b>   <color=#7d8a84>{s.Written:MMM d, HH:mm}</color>\n<color=#7d8a84>{s.Summary}</color>", labelSmall);
                 ui.BeginRow();
                 if (ui.Button("Load", button)) { AntGameMenu.LoadSave(world, s.Path); return; }
                 bool sure = confirmDelete == s.Path;
@@ -814,45 +822,34 @@ namespace AntSim
 
         void MakeStyles()
         {
-            var text = new Color(0.92f, 0.92f, 0.94f);
-            var dim = new Color(0.65f, 0.66f, 0.70f);
-            label = new UiStyle { FontSize = 14, Text = text };
-            labelSmall = new UiStyle { FontSize = 12, Text = dim };
-            header = new UiStyle { FontSize = 15, FontStyle = FontStyle.Bold, Text = text, Height = 24f, Align = TextAnchor.LowerLeft };
-            bigTitle = new UiStyle { FontSize = 26, FontStyle = FontStyle.Bold, Text = text };
-            barLabel = new UiStyle { FontSize = 14, Text = text, Wrap = false };
-            barLabelSmall = new UiStyle { FontSize = 12, Text = dim, Wrap = false };
-            toggle = new UiStyle { FontSize = 14, Text = text };
-            field = new UiStyle { FontSize = 15, Text = text };
-            button = new UiStyle
-            {
-                FontSize = 13, Text = text, Align = TextAnchor.MiddleCenter, Wrap = false, Height = 26f,
-                Background = new Color(0.22f, 0.22f, 0.27f), Hover = new Color(0.32f, 0.32f, 0.38f), Pressed = new Color(0.30f, 0.42f, 0.62f),
-            };
-            tabOff = button.Copy();
-            tabOff.Background = new Color(0.18f, 0.18f, 0.22f);
-            tabOn = button.Copy();
-            tabOn.FontStyle = FontStyle.Bold;
-            tabOn.Background = tabOn.Hover = new Color(0.30f, 0.42f, 0.62f);
-            rowStyle = new UiStyle
-            {
-                FontSize = 14, Text = text, Align = TextAnchor.UpperLeft, Wrap = true,
-                Background = new Color(1f, 1f, 1f, 0.03f), Hover = new Color(1f, 1f, 1f, 0.09f), Pressed = new Color(0.30f, 0.42f, 0.62f, 0.6f),
-                Padding = new RectOffset(8, 8, 6, 6),
-            };
-            menuButton = button.Copy();
-            menuButton.Height = 34f;
-            menuButton.FontSize = 15;
-            menuButtonOn = tabOn.Copy();
-            menuButtonOn.Height = 34f;
-            menuButtonOn.FontSize = 15;
+            label = UiTheme.Label(14);
+            labelSmall = UiTheme.Small(12);
+            header = UiTheme.Section(12);
+            bigTitle = UiTheme.Title(24);
+            barTitle = UiTheme.Title(17);
+            barTitle.Wrap = false;
+            barLabel = UiTheme.Label(14);
+            barLabel.Wrap = false;
+            barLabelSmall = UiTheme.Small(11);
+            barLabelSmall.Wrap = false;
+            toggle = UiTheme.Label(14);
+            field = UiTheme.Field(15);
+            button = UiTheme.Button(13, 30f);
+            button.Padding = new RectOffset(6, 6, 3, 3);
+            tabOff = UiTheme.Tab(button);
+            tabOn = UiTheme.On(button);
+            rowStyle = UiTheme.Card(14);
+            rowStyle.Padding = new RectOffset(9, 9, 6, 6);
+            rowFocused = UiTheme.CardOn(rowStyle);
+            menuButton = UiTheme.Button(15, 38f);
+            menuButtonOn = UiTheme.On(menuButton);
+            statBox = UiTheme.StatBox();
+            statKey = UiTheme.StatKey();
+            statValue = UiTheme.StatValue();
             settingsStyles = new GameSettings.Styles
             {
                 Header = header, Label = label, Small = labelSmall, Button = button, ButtonOn = tabOn, Toggle = toggle,
             };
-            rowFocused = rowStyle.Copy();
-            rowFocused.Background = rowFocused.Hover = new Color(0.30f, 0.42f, 0.62f, 0.45f);
-            rowFocused.Text = Color.white;
         }
 
         static string FormatTime(float seconds)
