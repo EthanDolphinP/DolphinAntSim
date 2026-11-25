@@ -171,7 +171,7 @@ namespace AntSim
 
             ui.Space(8);
             ui.Label("Updates", s.Header);
-            bool upd = ui.Toggle(CheckUpdates, "Check for a new version on the start screen (asks GitHub, nothing is downloaded)", s.Toggle);
+            bool upd = ui.Toggle(CheckUpdates, "Check for a new version on the start screen (asks GitHub; it only downloads when you click Update)", s.Toggle);
             if (upd != CheckUpdates) { CheckUpdates = upd; changed = true; }
             ui.Label($"This is version {Application.version}.", s.Small);
 

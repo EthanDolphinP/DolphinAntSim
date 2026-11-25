@@ -6,7 +6,7 @@ namespace AntSim
 {
     /// <summary>
     /// Asks GitHub (once per run) whether a newer release of the game is out, so the start screen can say so and
-    /// link to the download page. Nothing is downloaded or replaced automatically. Off with Settings ▸ Check for updates.
+    /// offer to update (GameUpdater). Nothing is downloaded until the player asks. Off with Settings ▸ Check for updates.
     /// </summary>
     public class UpdateCheck : MonoBehaviour
     {
@@ -16,11 +16,17 @@ namespace AntSim
         /// <summary>The newer version's tag (e.g. "v1.2"), or null if none is known.</summary>
         public static string NewerVersion { get; private set; }
         public static string DownloadUrl { get; private set; } = ReleasesPage;
+        /// <summary>The newer release's Windows zip, for updating in place (null if it has none).</summary>
+        public static string ZipUrl { get; private set; }
+        public static long ZipSize { get; private set; }
 
         static bool started;
 
         [System.Serializable]
-        class Release { public string tag_name; public string html_url; public bool draft; public bool prerelease; }
+        class Release { public string tag_name; public string html_url; public bool draft; public bool prerelease; public Asset[] assets; }
+
+        [System.Serializable]
+        class Asset { public string name; public string browser_download_url; public long size; }
 
         /// <summary>Starts the check if it hasn't run yet this session (and the setting allows it).</summary>
         public static void Begin()
@@ -49,6 +55,12 @@ namespace AntSim
                         {
                             NewerVersion = r.tag_name;
                             if (!string.IsNullOrEmpty(r.html_url)) DownloadUrl = r.html_url;
+                            foreach (var a in r.assets ?? new Asset[0])
+                                if (a.name != null && a.name.EndsWith("-Windows.zip", System.StringComparison.OrdinalIgnoreCase))
+                                {
+                                    ZipUrl = a.browser_download_url;
+                                    ZipSize = a.size;
+                                }
                         }
                     }
                     catch { /* a bad reply just means no notice */ }

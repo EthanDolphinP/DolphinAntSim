@@ -30,7 +30,7 @@ With [GitHub CLI](https://cli.github.com/) signed in once (`gh auth login`), clo
 
 It sets the version, builds the .exe, zips it, commits and tags `v1.2`, pushes, and publishes the GitHub release with the zip attached. Leave out the notes to have GitHub list the commits instead.
 
-**Update notice:** the start screen asks GitHub for the latest release once per run. If it's newer than the running version, it says so and offers a **Download** button that opens the release page. Nothing is downloaded or replaced automatically, and the check can be turned off in Settings.
+**Updates:** the start screen asks GitHub for the latest release once per run (this can be turned off in Settings). If that release is newer than the running version, the start screen offers **Update** and **Release page** buttons. Clicking **Update** (`GameUpdater.cs`) downloads only the files that changed, not the whole zip. It reads the file list at the end of the release's `-Windows.zip`, compares each file's size and CRC-32 with the game folder, and fetches just the changed files' bytes with HTTP range requests (from v1.1 to v1.2 that was 0.6 MB instead of 29 MB). It unpacks and checks them in `_update`, and then **Restart now** closes the game. A small batch script then moves the new files in and starts the game again. If the player quits instead, the update is installed on the way out. Saves and settings live elsewhere and are not touched. If the game folder can't be written to, or a file is locked, the player is told to use the release page instead. For this to work, releases must keep their zip named `...-Windows.zip`, with everything inside one top folder, as `release.ps1` makes them.
 
 ### Discord announcements
 

@@ -76,6 +76,8 @@ namespace AntSim
 
             GameSettings.Load();
             UpdateCheck.Begin();
+            string updateProblem = GameUpdater.Cleanup();
+            if (updateProblem != null) message = updateProblem;
             MakeStyles();
             ui = UiKit.Create(transform, "Menu", 20);
             background = ui.CreatePanel("Background", Vector2.zero, Vector2.zero, UiTheme.Bg,
@@ -167,8 +169,26 @@ namespace AntSim
                 ui.BeginRow();
                 ui.Label($"<b><color={UiTheme.AccentHex}>A new version is out: {UpdateCheck.NewerVersion}</color></b>  " +
                          $"<color={UiTheme.DimHex}>(you have {Application.version})</color>", label);
-                if (ui.Button("Download", buttonOn, 120)) Application.OpenURL(UpdateCheck.DownloadUrl);
+                ui.FlexibleSpace();
+                var st = GameUpdater.Current;
+                bool canUpdate = GameUpdater.Supported && UpdateCheck.ZipUrl != null;
+                if (st == GameUpdater.State.Ready)
+                {
+                    if (ui.Button("Restart now", buttonOn, 140)) GameUpdater.RestartToUpdate();
+                }
+                else if (st != GameUpdater.State.Working && canUpdate)
+                {
+                    if (ui.Button(st == GameUpdater.State.Failed ? "Try again" : "Update", buttonOn, 120)) GameUpdater.Begin();
+                }
+                if (st != GameUpdater.State.Ready && ui.Button("Release page", button, 140)) Application.OpenURL(UpdateCheck.DownloadUrl);
                 ui.EndRow();
+                if (st != GameUpdater.State.Idle)
+                {
+                    var statusStyle = st == GameUpdater.State.Failed ? error : small;
+                    ui.Label(GameUpdater.Status, statusStyle);
+                }
+                else if (canUpdate)
+                    ui.Label("Update downloads only the files that changed, then restarts the game. Saves and settings are kept.", small);
                 ui.EndBox();
                 ui.Space(6);
             }
