@@ -27,6 +27,19 @@ $tag = "v$Version"
 function Fail($msg) { Write-Host "Release stopped: $msg" -ForegroundColor Red; exit 1 }
 function Step($msg) { Write-Host "`n== $msg" -ForegroundColor Cyan }
 
+# Runs a program and stops the release if it fails. Git and gh print progress to stderr
+# ("To https://github.com/..."), which PowerShell would otherwise treat as an error and stop on
+# (when the output is redirected), so stderr is passed through as plain text and only the
+# exit code decides.
+function Run($what) {
+    $exe, $rest = $args
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try { & $exe @rest 2>&1 | ForEach-Object { Write-Host "$_" } }
+    finally { $ErrorActionPreference = $old }
+    if ($LASTEXITCODE -ne 0) { Fail "$what failed (exit code $LASTEXITCODE)" }
+}
+
 # ---- checks
 $gh = (Get-Command gh -ErrorAction SilentlyContinue).Source
 if (-not $gh) { $gh = "C:\Program Files\GitHub CLI\gh.exe" }
@@ -79,19 +92,18 @@ Write-Host ("{0} ({1:N1} MB)" -f $zip, ((Get-Item $zip).Length / 1MB))
 
 # ---- git
 Step "Committing, tagging $tag and pushing"
-git add $ps
+Run "git add" git add $ps
 git diff --cached --quiet
-if ($LASTEXITCODE -ne 0) { git commit -q -m "Version $Version" }
-git tag -a $tag -m "Version $Version"
-git push origin HEAD
-git push origin $tag
+if ($LASTEXITCODE -ne 0) { Run "git commit" git commit -q -m "Version $Version" }
+Run "git tag" git tag -a $tag -m "Version $Version"
+Run "git push" git push origin HEAD
+Run "git push of the tag" git push origin $tag
 
 # ---- release
 Step "Publishing GitHub release $tag"
 $ghArgs = @("release", "create", $tag, $zip, "--title", "Dolphin Ant Simulator $Version")
 if ($Notes) { $ghArgs += @("--notes", $Notes) } else { $ghArgs += "--generate-notes" }
-& $gh @ghArgs
-if ($LASTEXITCODE -ne 0) { Fail "gh release create failed (the tag is pushed; you can retry: gh release create $tag $zip)" }
+Run "gh release create (the tag is pushed; you can retry: gh release create $tag $zip)" $gh @ghArgs
 Write-Host "`nDone: https://github.com/EthanDolphinP/DolphinAntSim/releases/tag/$tag" -ForegroundColor Green
 
 # ---- discord

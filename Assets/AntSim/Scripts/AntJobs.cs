@@ -74,6 +74,16 @@ namespace AntSim
 
         public const int HotspotsPerColony = 4;
 
+        // Memory: every CheckEvery seconds an ant notes where it is. If it spent that time rubbing along rock or
+        // water and got nowhere, it remembers the spot as a bad one, backs out the way it came for a few seconds,
+        // tries the other way round next time and steers clear of the spot for MemoryTime seconds. Dead ends at
+        // the top of food trails are remembered the same way.
+        public const float RouteHalfLife = 600f; // scouts' route trails fade over ten minutes or so
+        const float CheckEvery = 2.5f;
+        const float MemoryTime = 90f;
+        const float AvoidRadius = 7f;
+        const byte EscapeTicks = 90;
+
         public void Execute(int i)
         {
             Ant a = Ants[i];
@@ -192,7 +202,40 @@ namespace AntSim
                 else
                 {
                     StepWorker(ref a, ref rng, toNest, nestDistSq, nest, ref speed, detour);
+                    // Heading home: keep following a rock's edge until the way home is clear (as soldiers do),
+                    // rather than being pulled straight back into a bay of rock or a crevice.
+                    if (a.State == AntState.Returning && !detour && nestDistSq > 64f)
+                    {
+                        navGoal = a.Position + math.normalize(toNest) * 8f;
+                        hasNav = true;
+                    }
                 }
+            }
+
+            // Ants that walk (not queens, princesses or winged males) remember where they've been.
+            bool walker = !wild && a.Caste != (byte)Caste.Queen && a.Caste != (byte)Caste.Princess && a.Caste != (byte)Caste.Male;
+            bool going = false; // has somewhere to be, so standing still means stuck
+            if (walker)
+            {
+                if (a.Caste == (byte)Caste.Soldier) going = hasNav && math.distancesq(navGoal, a.Position) > 100f;
+                else going = Morphs[a.Colony * MorphStats.MaxMorphs + a.Morph].StaysHome == 0;
+                if (cr.Engaged != 0) a.Escape = 0;
+                else if (a.Escape > 0)
+                {
+                    // Backing out of a crevice or a bay toward the last open ground it passed.
+                    float2 back = a.Back;
+                    if (math.all(back == float2.zero)) back = Nests[a.Nest].Position;
+                    float2 d = back - a.Position;
+                    if (math.lengthsq(d) < 4f) a.Escape = 0;
+                    else
+                    {
+                        a.Escape--;
+                        a.Angle = TurnTowards(a.Angle, math.atan2(d.y, d.x), P.TurnSpeed * 2f * Dt);
+                        navGoal = back;
+                        hasNav = true;
+                    }
+                }
+                else AvoidBadSpots(ref a);
             }
 
             // Sand slows walkers; princesses and winged males fly over everything.
@@ -209,6 +252,7 @@ namespace AntSim
             math.sincos(a.Angle, out float s, out float c);
             float2 np = a.Position + new float2(c, s) * (a.Speed * Dt);
             if (a.Detour != 0) a.Detour = (byte)((a.Detour & 0x7F) > 1 ? a.Detour - 1 : 0);
+            bool touched = false;
             if (!flyer && !TerrainKind.Blocks(Terrain[hereCell]))
             {
                 // Look a little further ahead than one step so ants turn before they touch the edge.
@@ -216,11 +260,12 @@ namespace AntSim
                 float2 probe = a.Position + new float2(c, s) * math.max(step, 1.2f);
                 bool blocked = Grid.Contains(np) && TerrainKind.Blocks(Terrain[Grid.CellIndex(np)]);
                 bool near = Grid.Contains(probe) && TerrainKind.Blocks(Terrain[Grid.CellIndex(probe)]);
+                touched = blocked || near;
                 // Ordinary searching workers and bugs have nowhere particular to be: they turn away from rock and
                 // water (as from the map edge) and spread back over open ground instead of lining the shore.
                 // Scouts, ants with somewhere to go, and soldiers follow the edge round (see below).
                 bool wanderer = wild || (a.State == AntState.Searching && a.Caste == (byte)Caste.Worker
-                                         && a.Role >= Nests[a.Nest].ScoutPercent && a.Detour == 0);
+                                         && a.Role >= Nests[a.Nest].ScoutPercent && a.Detour == 0 && a.Escape == 0);
                 bool turned = false;
                 if ((blocked || near) && wanderer)
                 {
@@ -263,7 +308,8 @@ namespace AntSim
                         // always goes round the same way (half the colony left, half right). With a random choice every
                         // time, ants on a long shore just random-walk along it and pile up opposite home; with a fixed
                         // one they drift steadily along it and reach the ford or the end of the ridge.
-                        float mine = (a.Role & 1) == 0 ? 1f : -1f;
+                        // Bit 7 of WallTicks flips it after the ant got stuck going the usual way.
+                        float mine = ((a.Role ^ (a.WallTicks >> 7)) & 1) == 0 ? 1f : -1f;
                         bool l = Free(a.Position, a.Angle + 0.35f, 1.2f) || Free(a.Position, a.Angle + 0.7f, 1.2f);
                         bool r = Free(a.Position, a.Angle - 0.35f, 1.2f) || Free(a.Position, a.Angle - 0.7f, 1.2f);
                         side = l && !r ? 1f : r && !l ? -1f : mine;
@@ -311,12 +357,86 @@ namespace AntSim
                 np.y = math.clamp(np.y, 0f, Grid.WorldSize.y - 0.01f);
             }
             a.Position = np;
+            if (walker) UpdateMemory(ref a, touched, going && cr.Engaged == 0);
 
             // Keep the angle small so sin/cos stay precise.
             if (math.abs(a.Angle) > 64f) a.Angle = math.fmod(a.Angle, 2f * math.PI);
 
             a.Rng = rng.state;
             Ants[i] = a;
+        }
+
+        // ------------------------------------------------------------------ memory
+
+        void UpdateMemory(ref Ant a, bool touched, bool going)
+        {
+            if (touched && (a.WallTicks & 0x7F) < 0x7F) a.WallTicks++;
+            float clock = a.Clock + Dt;
+            if (clock < CheckEvery) { a.Clock = (half)clock; return; }
+
+            float2 pos = a.Position;
+            float2 mark = a.Mark;
+            NestData nest = Nests[a.Nest];
+            float homeR = nest.Radius * 3f;
+            int wallTicks = a.WallTicks & 0x7F;
+            // Going nowhere: rubbing along rock or water for a good part of the last couple of seconds and hardly
+            // any further on than at the last checkpoint. That's a crevice, a bay, or a rock it can't get round.
+            bool stuck = going && a.Escape == 0 && wallTicks >= 10 && a.Speed > 0.5f
+                         && math.distancesq(pos, nest.Position) > homeR * homeR
+                         && math.distance(pos, mark) < math.max(2f, a.Speed * clock * 0.2f);
+            if (stuck)
+            {
+                Remember(ref a, (pos + mark) * 0.5f);
+                a.Escape = EscapeTicks;
+                a.Detour = 0;
+                a.WallTicks ^= 0x80; // go round the other way next time
+            }
+            else if (wallTicks == 0) a.Back = (half2)pos; // open ground: a safe way back
+
+            a.Mark = (half2)pos;
+            a.Clock = default;
+            a.WallTicks &= 0x80;
+            a.Forget0 = (half)math.max(0f, a.Forget0 - clock);
+            a.Forget1 = (half)math.max(0f, a.Forget1 - clock);
+        }
+
+        /// <summary>Remember a bad spot (refreshing it if already known, else replacing the older memory).</summary>
+        static void Remember(ref Ant a, float2 p)
+        {
+            if (a.Forget0 > 0f && math.distancesq(a.Avoid0, p) < 16f) { a.Forget0 = (half)MemoryTime; return; }
+            if (a.Forget1 > 0f && math.distancesq(a.Avoid1, p) < 16f) { a.Forget1 = (half)MemoryTime; return; }
+            if (a.Forget0 <= a.Forget1) { a.Avoid0 = (half2)p; a.Forget0 = (half)MemoryTime; }
+            else { a.Avoid1 = (half2)p; a.Forget1 = (half)MemoryTime; }
+        }
+
+        /// <summary>Is this point in one of the ant's remembered bad spots?</summary>
+        static bool Avoided(in Ant a, float2 p)
+        {
+            const float r2 = AvoidRadius * AvoidRadius * 0.5f;
+            return (a.Forget0 > 0f && math.distancesq(a.Avoid0, p) < r2) || (a.Forget1 > 0f && math.distancesq(a.Avoid1, p) < r2);
+        }
+
+        /// <summary>Veer away from remembered bad spots when heading into one (gently when carrying food home).</summary>
+        void AvoidBadSpots(ref Ant a)
+        {
+            if (a.Forget0 <= 0f && a.Forget1 <= 0f) return;
+            NestData nest = Nests[a.Nest];
+            float homeR = nest.Radius * 3f;
+            if (math.distancesq(a.Position, nest.Position) < homeR * homeR) return; // home is always worth reaching
+            math.sincos(a.Angle, out float s, out float c);
+            float2 h = new float2(c, s);
+            float strength = a.State == AntState.Returning ? 1f : 2f;
+            for (int k = 0; k < 2; k++)
+            {
+                if ((k == 0 ? a.Forget0 : a.Forget1) <= 0f) continue;
+                float2 d = (float2)(k == 0 ? a.Avoid0 : a.Avoid1) - a.Position;
+                float dist = math.length(d);
+                if (dist >= AvoidRadius || dist < 0.01f) continue;
+                float toward = math.dot(h, d / dist);
+                if (toward <= 0f) continue;
+                float turn = P.TurnSpeed * Dt * strength * toward * (1f - dist / AvoidRadius);
+                a.Angle += h.x * d.y - h.y * d.x > 0f ? -turn : turn;
+            }
         }
 
         // ------------------------------------------------------------------ wildlife
@@ -473,11 +593,18 @@ namespace AntSim
                 }
                 else if (scout)
                 {
-                    // Scouts look for new food: they see it from far off and prefer ground nobody has walked.
-                    float l = SenseScout(a.Colony, a.Position, a.Angle + P.SensorAngle, leaves);
-                    float f = SenseScout(a.Colony, a.Position, a.Angle, leaves);
-                    float r = SenseScout(a.Colony, a.Position, a.Angle - P.SensorAngle, leaves);
-                    SteerByScores(ref a, ref rng, l, f, r);
+                    // Part of the time scouts check the routes they laid earlier: walk one out to its end. Food still
+                    // there: they bring some home and lay the route afresh. Gone: they wipe the end (see FollowTrail),
+                    // so nobody else walks out there for nothing.
+                    bool patrol = math.frac(a.Age / 120f + a.Role * 0.137f) < 0.4f;
+                    if (!(patrol && FollowTrail(ref a, ref rng, Pheromone.Route, cell, leaves, toNest, true)))
+                    {
+                        // Otherwise they look for new food: they see it from far off and prefer ground nobody has walked.
+                        float l = SenseScout(a.Colony, a.Position, a.Angle + P.SensorAngle, leaves);
+                        float f = SenseScout(a.Colony, a.Position, a.Angle, leaves);
+                        float r = SenseScout(a.Colony, a.Position, a.Angle - P.SensorAngle, leaves);
+                        SteerByScores(ref a, ref rng, l, f, r);
+                    }
                     if (a.Trail < P.GiveUpTrail) a.State = AntState.Returning;
                 }
                 else if (a.Explore > 0f)
@@ -489,53 +616,10 @@ namespace AntSim
                 }
                 else
                 {
-                    int foodIdx = (a.Colony * Pheromone.ChannelCount + Pheromone.ToFood) * Grid.CellCount;
-                    float here = Pheromones[foodIdx + cell];
-                    int cl = SensorCell(a.Position, a.Angle + P.SensorAngle, P.SensorDistance);
-                    int cf = SensorCell(a.Position, a.Angle, P.SensorDistance);
-                    int cr = SensorCell(a.Position, a.Angle - P.SensorAngle, P.SensorDistance);
-                    float ownL = cl < 0 ? -1f : Pheromones[foodIdx + cl];
-                    float ownF = cf < 0 ? -1f : Pheromones[foodIdx + cf];
-                    float ownR = cr < 0 ? -1f : Pheromones[foodIdx + cr];
-                    float bestOwn = math.max(ownF, math.max(ownL, ownR));
-
-                    if (bestOwn > P.TrailFollowMin || here > P.TrailFollowMin)
-                    {
-                        // On a trail: follow it closely, steering hard and hardly wandering.
-                        float l = TrailScore(ownL, cl, a.Colony, leaves);
-                        float f = TrailScore(ownF, cf, a.Colony, leaves);
-                        float r = TrailScore(ownR, cr, a.Colony, leaves);
-                        float turn = P.TurnSpeed * 1.5f * Dt;
-                        if (f >= l && f >= r) { }
-                        else if (l > r) a.Angle += turn;
-                        else if (r > l) a.Angle -= turn;
-                        a.Angle += rng.NextFloat(-1f, 1f) * P.Wander * 0.35f * Dt;
-
-                        // Dead end: on a food trail, nothing uphill, and no food in sight. The source is gone.
-                        float best = math.max(f, math.max(l, r));
-                        if (here > 0.08f && best < 5f && bestOwn <= here * 0.97f) a.Stuck = (half)(a.Stuck + Dt);
-                        else a.Stuck = (half)math.max(0f, a.Stuck - Dt * 0.3f);
-
-                        if (a.Stuck > P.DeadEndTime)
-                        {
-                            // Wipe the stale trail end so others stop coming, then wander off for a bit.
-                            int cx = cell % Grid.Width, cy = cell / Grid.Width;
-                            for (int oy = -2; oy <= 2; oy++)
-                            for (int ox = -2; ox <= 2; ox++)
-                            {
-                                int x = cx + ox, y = cy + oy;
-                                if (x < 0 || y < 0 || x >= Grid.Width || y >= Grid.Height) continue;
-                                Pheromones[foodIdx + y * Grid.Width + x] *= 0.1f;
-                            }
-                            a.Stuck = default;
-                            a.Explore = (half)3f;
-                            a.Angle += rng.NextFloat(-2f, 2f);
-                        }
-                    }
-                    else
-                    {
+                    // Follow the colony's food trail; where that has faded, a scout's route.
+                    if (!FollowTrail(ref a, ref rng, Pheromone.ToFood, cell, leaves, toNest)
+                        && !FollowTrail(ref a, ref rng, Pheromone.Route, cell, leaves, toNest))
                         Dawdle(ref a, ref rng, ref speed, nestDistSq, toNest, nest, leaves);
-                    }
 
                     // Wandered too far without luck: give up and go home.
                     if (a.Trail < P.GiveUpTrail) a.State = AntState.Returning;
@@ -572,11 +656,153 @@ namespace AntSim
                         a.Angle = TurnTowards(a.Angle, nestAngle, P.HomeBias * Dt);
                     }
 
-                    if (a.Carrying != Cargo.None) Deposit(a.Colony, Pheromone.ToFood, cell, a.Trail);
+                    if (a.Carrying == Cargo.None && a.Explore > 0f)
+                    {
+                        // Rubbing out a dead route on the way home. Where food is still coming along the trail, the
+                        // route is shared with a live one: stop there.
+                        a.Explore = (half)(a.Explore - Dt);
+                        int fi = (a.Colony * Pheromone.ChannelCount + Pheromone.ToFood) * Grid.CellCount;
+                        if (Pheromones[fi + cell] > 0.3f) a.Explore = default;
+                        else
+                        {
+                            int ri = (a.Colony * Pheromone.ChannelCount + Pheromone.Route) * Grid.CellCount;
+                            int cx = cell % Grid.Width, cy = cell / Grid.Width;
+                            for (int oy = -1; oy <= 1; oy++)
+                            for (int ox = -1; ox <= 1; ox++)
+                            {
+                                int x = cx + ox, y = cy + oy;
+                                if (x >= 0 && y >= 0 && x < Grid.Width && y < Grid.Height) Pheromones[ri + y * Grid.Width + x] = 0f;
+                            }
+                        }
+                    }
+                    if (a.Carrying != Cargo.None)
+                    {
+                        Deposit(a.Colony, Pheromone.ToFood, cell, a.Trail);
+                        // Scouts mark the way to what they found with a lasting route; anyone bringing food home
+                        // along an existing route keeps it fresh.
+                        int ri = (a.Colony * Pheromone.ChannelCount + Pheromone.Route) * Grid.CellCount + cell;
+                        if (scout || Pheromones[ri] > 0.02f) Deposit(a.Colony, Pheromone.Route, cell, a.Trail * (scout ? 1f : 0.8f));
+                    }
                 }
             }
 
             a.Trail *= decay;
+        }
+
+        /// <summary>
+        /// Follows one of the colony's trails toward food (to-food, or a scout's route). Returns false when there is
+        /// no such trail here. At the top of a trail with no food in sight it checks all round whether the trail
+        /// really ends here or only bends or meets another one; only a real end, with nothing found for a moment,
+        /// is a dead end: the end is wiped, so others stop coming, and the ant remembers it and wanders off.
+        /// </summary>
+        bool FollowTrail(ref Ant a, ref Random rng, int channel, int cell, bool leaves, float2 toNest, bool scout = false)
+        {
+            int idx = (a.Colony * Pheromone.ChannelCount + channel) * Grid.CellCount;
+            float here = Pheromones[idx + cell];
+            int cl = SensorCell(a.Position, a.Angle + P.SensorAngle, P.SensorDistance);
+            int cf = SensorCell(a.Position, a.Angle, P.SensorDistance);
+            int cr = SensorCell(a.Position, a.Angle - P.SensorAngle, P.SensorDistance);
+            // Trail leading into a remembered dead end or crevice doesn't count.
+            if (cl >= 0 && Avoided(a, Grid.CellCenter(cl))) cl = -1;
+            if (cf >= 0 && Avoided(a, Grid.CellCenter(cf))) cf = -1;
+            if (cr >= 0 && Avoided(a, Grid.CellCenter(cr))) cr = -1;
+            if (cl < 0 && cf < 0 && cr < 0) return false;
+            float ownL = cl < 0 ? -1f : Pheromones[idx + cl];
+            float ownF = cf < 0 ? -1f : Pheromones[idx + cf];
+            float ownR = cr < 0 ? -1f : Pheromones[idx + cr];
+            float bestOwn = math.max(ownF, math.max(ownL, ownR));
+            if (!(bestOwn > P.TrailFollowMin || here > P.TrailFollowMin)) return false;
+
+            // On a trail: follow it closely, steering hard and hardly wandering.
+            float l = TrailScore(ownL, cl, a.Colony, leaves);
+            float f = TrailScore(ownF, cf, a.Colony, leaves);
+            float r = TrailScore(ownR, cr, a.Colony, leaves);
+            float turn = P.TurnSpeed * 1.5f * Dt;
+            if (f >= l && f >= r) { }
+            else if (l > r) a.Angle += turn;
+            else if (r > l) a.Angle -= turn;
+            a.Angle += rng.NextFloat(-1f, 1f) * P.Wander * 0.35f * Dt;
+
+            // Top of the trail as far as the three feelers can tell: nothing stronger ahead and no food in sight.
+            float best = math.max(f, math.max(l, r));
+            bool top = here > 0.08f && best < 5f && bestOwn <= here * 0.97f;
+            // Look all round once, on arriving at the top (while circling there its heading no longer says which way
+            // it came from).
+            if (top && a.Stuck < Dt * 1.5f && TrailGoesOn(ref a, idx, here, leaves)) top = false;
+            if (top) a.Stuck = (half)(a.Stuck + Dt);
+            else a.Stuck = (half)math.max(0f, a.Stuck - Dt * 0.3f);
+
+            if (a.Stuck > P.DeadEndTime)
+            {
+                // A real dead end: wipe the stale end of the trail (and of any route there) so others stop coming,
+                // remember the spot, and wander off for a bit.
+                int foodIdx = (a.Colony * Pheromone.ChannelCount + Pheromone.ToFood) * Grid.CellCount;
+                int routeIdx = (a.Colony * Pheromone.ChannelCount + Pheromone.Route) * Grid.CellCount;
+                int cx = cell % Grid.Width, cy = cell / Grid.Width;
+                for (int oy = -2; oy <= 2; oy++)
+                for (int ox = -2; ox <= 2; ox++)
+                {
+                    int x = cx + ox, y = cy + oy;
+                    if (x < 0 || y < 0 || x >= Grid.Width || y >= Grid.Height) continue;
+                    Pheromones[foodIdx + y * Grid.Width + x] *= 0.1f;
+                    Pheromones[routeIdx + y * Grid.Width + x] = 0f;
+                }
+                Remember(ref a, a.Position);
+                a.Stuck = default;
+                if (scout && channel == Pheromone.Route)
+                {
+                    // A scout checking a route found it dead: it heads home rubbing the route out as it goes (see
+                    // the returning branch), up to where food is still being carried along it.
+                    a.State = AntState.Returning;
+                    a.Explore = (half)40f;
+                    a.Angle += math.PI;
+                }
+                else
+                {
+                    a.Explore = (half)3f;
+                    a.Angle += rng.NextFloat(-2f, 2f);
+                }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Looks round (two rings of feelers) on reaching the top of a trail, ahead and to the sides but not back the
+        /// way it came. Food in sight: head for it. Trail carrying on somewhere (round a sharp bend, or where it meets
+        /// another trail): not an end, so take it (preferring the strongest). Nothing: the trail really ends here.
+        /// </summary>
+        bool TrailGoesOn(ref Ant a, int idx, float here, bool leaves)
+        {
+            const int N = 16;
+            float thresh = math.max(P.TrailFollowMin, here * 0.3f);
+            float bestV = 0f, bestAng = 0f;
+            for (int k = 0; k < N; k++)
+            {
+                float rel = (k - N / 2 + 0.5f) * (2f * math.PI / N); // -pi..pi around the heading
+                if (math.abs(rel) > 1.85f) continue;                   // the way it came
+                float ang = a.Angle + rel;
+                math.sincos(ang, out float s, out float c);
+                float2 dir = new float2(c, s);
+                float v = 0f;
+                for (int ring = 1; ring <= 2; ring++)
+                {
+                    float2 p = a.Position + dir * (P.SensorDistance * (ring == 1 ? 1.6f : 3f));
+                    if (!Grid.Contains(p)) break;
+                    int pc = Grid.CellIndex(p);
+                    if (TerrainKind.Blocks(Terrain[pc])) break;
+                    if (Food[pc] > 0 || (leaves && Leaves[pc] > 0))
+                    {
+                        a.Angle = TurnTowards(a.Angle, ang, P.TurnSpeed * 2f * Dt);
+                        return true;
+                    }
+                    if (Avoided(a, p)) break;
+                    v = math.max(v, Pheromones[idx + pc]);
+                }
+                if (v >= thresh && v > bestV) { bestV = v; bestAng = ang; }
+            }
+            if (bestV <= 0f) return false;
+            a.Angle = TurnTowards(a.Angle, bestAng, P.TurnSpeed * 2f * Dt);
+            return true;
         }
 
         /// <summary>
@@ -1083,7 +1309,7 @@ namespace AntSim
     public struct EvaporateJob : IJobParallelFor
     {
         [NativeDisableParallelForRestriction] public NativeArray<float> Pheromones;
-        public float3 Factors; // per channel: to-home, to-food, alarm
+        public float4 Factors; // per channel: to-home, to-food, alarm, route
         public int CellCount;
         public int Offset;     // processes [Offset, Offset + jobLength)
         [ReadOnly] public NativeArray<byte> Frozen; // per colony: sleeping colonies keep their trails
@@ -1256,7 +1482,8 @@ namespace AntSim
                     float home = Pheromones[baseIdx];
                     float food = Pheromones[baseIdx + Grid.CellCount];
                     float alarm = Pheromones[baseIdx + 2 * Grid.CellCount];
-                    float s = math.saturate(home * 0.25f + food * 0.8f);
+                    float route = Pheromones[baseIdx + 3 * Grid.CellCount];
+                    float s = math.saturate(home * 0.25f + food * 0.8f + route * 0.3f);
                     col += ColonyColors[c].xyz * (s * 0.55f);
                     col += new float3(0.9f, 0.1f, 0.05f) * math.saturate(alarm) * 0.7f;
                 }

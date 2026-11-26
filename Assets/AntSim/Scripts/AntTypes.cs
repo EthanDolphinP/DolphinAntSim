@@ -103,7 +103,9 @@ namespace AntSim
         public const int ToHome = 0;
         public const int ToFood = 1;
         public const int Alarm = 2;  // laid by fighting ants; soldiers follow it to the battle
-        public const int ChannelCount = 3;
+        public const int Route = 3;  // laid by scouts coming home with food; fades over many minutes
+        public const int ChannelCount = 4;
+        public const int OldChannelCount = 3; // saves before version 3
     }
 
     /// <summary>
@@ -132,7 +134,18 @@ namespace AntSim
         public byte Detour;     // following rock/water: bit 7 = which way round, bits 0-6 = ticks left (fills padding; size stays 56)
         public half Explore;    // seconds left exploring (ignoring food trails) after hitting a dead end
         public half Stuck;      // seconds spent at the top of a food trail with no food in sight
+        public half Clock;      // seconds since the last memory checkpoint (fills padding)
         public float Speed;     // current walking speed (eases toward the wanted speed; also used to draw between ticks)
+
+        // Memory (see AntStepJob.Remember). Positions are half precision: plenty for "roughly where".
+        public half2 Mark;      // where it was at the last checkpoint (every couple of seconds)
+        public half2 Back;      // the last checkpoint out on open ground: the way out if it gets stuck
+        public half2 Avoid0;    // two remembered bad spots (a dead end, a crevice it got stuck in)
+        public half2 Avoid1;
+        public half Forget0;    // seconds left remembering each of them
+        public half Forget1;
+        public byte WallTicks;  // ticks spent touching rock or water since the last checkpoint
+        public byte Escape;     // ticks left backing out toward Back after getting stuck
     }
 
     /// <summary>One nest. A colony can own several; colony-wide fields are copied into each of its nests every tick.</summary>

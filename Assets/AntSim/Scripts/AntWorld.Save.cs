@@ -31,7 +31,8 @@ namespace AntSim
     public unsafe partial class AntWorld
     {
         const string SaveMagic = "ANTSAVE";
-        const int SaveVersion = 2;      // 2: trees and defences
+        const int SaveVersion = 3;      // 2: trees and defences; 3: ant memory, route trails
+        const int OldAntSize = 56;      // an Ant before version 3
         const int OldestSaveVersion = 1;
         public const string SaveExtension = ".antsave";
         public const string AutosaveName = "Autosave";
@@ -249,7 +250,8 @@ namespace AntSim
             if (version < OldestSaveVersion || version > SaveVersion)
                 throw new InvalidDataException($"save version {version}, this game reads {OldestSaveVersion} to {SaveVersion}");
             int antSize = r.ReadInt32();
-            if (antSize != UnsafeUtility.SizeOf<Ant>()) throw new InvalidDataException("made by a different build of the game");
+            int wantSize = version < 3 ? OldAntSize : UnsafeUtility.SizeOf<Ant>();
+            if (antSize != wantSize) throw new InvalidDataException("made by a different build of the game");
             summary = r.ReadString();
             var setup = new GameSetup();
             ReadFields(r, setup);
@@ -319,11 +321,16 @@ namespace AntSim
             int antCount = PeekLength(r);
             ants.ResizeUninitialized(antCount);
             var antArray = ants.AsArray();
-            ReadNative(r, antArray);
-            var halfs = new NativeArray<half>(pheromones.Length, Allocator.TempJob);
-            ReadNative(r, halfs);
-            new UnpackHalfJob { From = halfs, To = pheromones }.Schedule(pheromones.Length, 65536).Complete();
-            halfs.Dispose();
+            if (version >= 3) ReadNative(r, antArray);
+            else ReadOldAnts(r, antArray);
+            if (version >= 3)
+            {
+                var halfs = new NativeArray<half>(pheromones.Length, Allocator.TempJob);
+                ReadNative(r, halfs);
+                new UnpackHalfJob { From = halfs, To = pheromones }.Schedule(pheromones.Length, 65536).Complete();
+                halfs.Dispose();
+            }
+            else ReadOldPheromones(r);
             ReadNative(r, food);
             ReadNative(r, leaves);
             ReadNative(r, plantCap);
@@ -355,6 +362,38 @@ namespace AntSim
             if (needTrees) GenerateTrees(); // saves from before trees: grow some now
             new BusyTrailsJob { Pheromones = pheromones, Busy = busyTrails, Grid = grid, BusyW = busyW, BusyH = busyH }
                 .Schedule(busyTrails.Length, 4096).Complete();
+        }
+
+        /// <summary>Ants from before version 3: the same fields, without the memory at the end (which starts empty).</summary>
+        static void ReadOldAnts(BinaryReader r, NativeArray<Ant> into)
+        {
+            int length = peekedLength >= 0 ? peekedLength : r.ReadInt32();
+            peekedLength = -1;
+            if (r.ReadInt32() != OldAntSize || length != into.Length) throw new InvalidDataException("ant data doesn't match");
+            byte[] buf = r.ReadBytes(length * OldAntSize);
+            if (buf.Length != length * OldAntSize) throw new EndOfStreamException();
+            byte* dst = (byte*)into.GetUnsafePtr();
+            int size = UnsafeUtility.SizeOf<Ant>();
+            UnsafeUtility.MemClear(dst, (long)length * size);
+            fixed (byte* src = buf)
+                for (int i = 0; i < length; i++)
+                    UnsafeUtility.MemCpy(dst + (long)i * size, src + (long)i * OldAntSize, OldAntSize);
+        }
+
+        /// <summary>Trails from before version 3 had three channels per colony; the route channel starts empty.</summary>
+        void ReadOldPheromones(BinaryReader r)
+        {
+            int cells = grid.CellCount;
+            var halfs = new NativeArray<half>(colonyCount * Pheromone.OldChannelCount * cells, Allocator.TempJob);
+            ReadNative(r, halfs);
+            for (int c = 0; c < colonyCount; c++)
+            for (int ch = 0; ch < Pheromone.ChannelCount; ch++)
+            {
+                int to = (c * Pheromone.ChannelCount + ch) * cells;
+                int from = (c * Pheromone.OldChannelCount + ch) * cells;
+                for (int i = 0; i < cells; i++) pheromones[to + i] = ch < Pheromone.OldChannelCount ? (float)halfs[from + i] : 0f;
+            }
+            halfs.Dispose();
         }
 
         static int PeekLength(BinaryReader r)

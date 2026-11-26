@@ -609,10 +609,11 @@ namespace AntSim
             h = new EvaporateJob
             {
                 Pheromones = pheromones,
-                Factors = new float3(
+                Factors = new float4(
                     math.pow(0.5f, evapDt / sim.PheromoneHalfLife),
                     math.pow(0.5f, evapDt / sim.PheromoneHalfLife),
-                    math.pow(0.5f, evapDt / combat.AlarmHalfLife)),
+                    math.pow(0.5f, evapDt / combat.AlarmHalfLife),
+                    math.pow(0.5f, evapDt / AntStepJob.RouteHalfLife)),
                 CellCount = grid.CellCount,
                 Offset = sliceStart,
                 Frozen = frozenTrails,
