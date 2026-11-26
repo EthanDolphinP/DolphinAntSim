@@ -19,6 +19,11 @@ namespace AntSim
         public float QueenlessTime;
         public float SleepShare;    // fraction of the colony's ants that live here, while it sleeps
         public float FoundedAt;
+        public int MovingFrom = -1; // moving house: this is the new site, and the queen is walking here from that nest
+        public int MovingTo = -1;   // moving house: this is the old nest, being left for that one
+        public float MoveTime;      // seconds since the move started
+        public float MoveRetry;     // termites: seconds until the next look for a tree to move to
+        public bool NoTreeWarned;
     }
 
     /// <summary>
@@ -50,6 +55,7 @@ namespace AntSim
         NativeArray<short> coreOwner;
         NativeArray<float> nestShare;
         NativeReference<int> reassignCount;
+        NativeArray<float2> queenPos; // per nest: where its queen is (read by soldiers escorting a moving queen)
 
         void AllocateNestArrays()
         {
@@ -63,6 +69,7 @@ namespace AntSim
             nestIntruders = new NativeArray<int>(MaxNests, Allocator.Persistent);
             nestShare = new NativeArray<float>(MaxNests, Allocator.Persistent);
             reassignCount = new NativeReference<int>(Allocator.Persistent);
+            queenPos = new NativeArray<float2>(MaxNests, Allocator.Persistent);
         }
 
         void DisposeNests()
@@ -76,6 +83,7 @@ namespace AntSim
             if (nestIntruders.IsCreated) nestIntruders.Dispose();
             if (nestShare.IsCreated) nestShare.Dispose();
             if (reassignCount.IsCreated) reassignCount.Dispose();
+            if (queenPos.IsCreated) queenPos.Dispose();
         }
 
         CompactJob MakeCompactJob() => new CompactJob
@@ -166,7 +174,7 @@ namespace AntSim
                 var col = Colonies[info.Colony];
                 int qi = queenIndex[k];
                 bool hasQueen = qi >= 0 && qi < ants.Length;
-                if (info.HasQueen && !hasQueen && !info.Founding && info.Colony == Player)
+                if (info.HasQueen && !hasQueen && !info.Founding && info.MovingTo < 0 && info.Colony == Player)
                     Notify($"The queen of nest {info.Number} has died.");
                 info.HasQueen = hasQueen;
                 info.QueenHealth = hasQueen ? ants[qi].Health : 0f;
@@ -370,9 +378,7 @@ namespace AntSim
         {
             if (!col.AutoSwarm || col.SwarmCooldown > 0f) return;
             int cap = math.min(col.MaxNests, swarm.MaxNestsPerColony);
-            // Termites whose tree is dying move out whatever their numbers (an extra nest is allowed for it).
-            bool mustMove = NeedsNewTree(c) && col.NestCount < swarm.MaxNestsPerColony;
-            if (!mustMove && (col.NestCount >= cap || col.Population < col.SwarmAt * col.NestCount)) return;
+            if (col.NestCount >= cap || col.Population < col.SwarmAt * col.NestCount) return;
             float reserve = col.Population * economy.UpkeepPerAntPerSecond * economy.FoodReserveSeconds;
             if (col.Food < swarm.Cost + reserve) return;
             col.SwarmCooldown = 20f; // don't search for a site every second
@@ -524,6 +530,155 @@ namespace AntSim
                 if (score > bestScore) { bestScore = score; site = p; }
             }
             return bestScore > float.MinValue;
+        }
+
+        // ------------------------------------------------------------------ moving house
+
+        public const float MoveCost = 60f;
+        public const float MoveMaxDistance = 180f;
+        const float MoveTimeout = 420f;
+
+        /// <summary>Next left click picks the new site for this nest (-1: not placing).</summary>
+        public int PlacingMove { get; set; } = -1;
+
+        /// <summary>The new site this colony is moving a nest to, or -1.</summary>
+        public int MoveInProgress(int c)
+        {
+            for (int k = 0; k < nestHigh; k++)
+                if (nestInfo[k] != null && nestInfo[k].Colony == c && nestInfo[k].MovingFrom >= 0) return k;
+            return -1;
+        }
+
+        /// <summary>Why this nest can't move house right now, or null.</summary>
+        public string MoveBlocker(int c, int k, bool free = false)
+        {
+            var info = GetNest(k);
+            if (info == null || info.Colony != c) return "That isn't one of your nests.";
+            if (info.Founding) return "That nest isn't settled yet.";
+            if (!info.HasQueen) return "Only a nest with a queen can move: she leads the way.";
+            if (MoveInProgress(c) >= 0) return "Your colony is already moving a nest.";
+            if (!free && Colonies[c].Food < MoveCost) return $"Not enough food: moving costs {MoveCost:0}.";
+            return null;
+        }
+
+        /// <summary>Checks a new site for nest k. Returns an error message, or null if it's fine.</summary>
+        public string ValidateMoveSite(int c, int k, float2 p)
+        {
+            float margin = sim.NestRadius * 3f;
+            if (p.x < margin || p.y < margin || p.x > grid.WorldSize.x - margin || p.y > grid.WorldSize.y - margin)
+                return "Too close to the edge of the map.";
+            if (!AreaClear(p, sim.NestRadius * 2.5f)) return "Ants can't nest on rock or water.";
+            float from = math.distance(p, nests[k].Position);
+            if (from < 15f) return "That's where the nest already is.";
+            if (from > MoveMaxDistance) return $"Too far: a queen can walk at most {MoveMaxDistance:0}.";
+            string treeErr = TreeSiteError(c, p);
+            if (treeErr != null) return treeErr;
+            for (int j = 0; j < nestHigh; j++)
+            {
+                var info = nestInfo[j];
+                if (info == null || j == k) continue;
+                float d = math.distance(p, nests[j].Position);
+                if (info.Colony == c) { if (d < swarm.MinSpacing) return $"Too close to another of your nests (min {swarm.MinSpacing:0})."; }
+                else if (d < swarm.EnemyClearance) return "Too close to another colony's nest.";
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Moves a nest house: the queen walks to the new site (faster than her usual crawl) with the soldiers round
+        /// her, the workers go ahead to set it up, and the old nest is given up when she gets there.
+        /// Returns an error message, or null.
+        /// </summary>
+        public string MoveNest(int c, int k, float2 site, bool free = false)
+        {
+            string err = MoveBlocker(c, k, free) ?? ValidateMoveSite(c, k, site);
+            if (err != null) return err;
+            int qi = queenIndex[k];
+            if (qi < 0 || qi >= ants.Length) return "That nest's queen can't be found.";
+            int n = AllocNest(c, site, true);
+            if (n < 0) return "The world is full of nests.";
+            var col = Colonies[c];
+            if (!free) col.Food -= MoveCost;
+
+            var from = nestInfo[k];
+            var to = nestInfo[n];
+            to.MovingFrom = k;
+            to.MoveTime = 0f;
+            to.Number = from.Number; // it's the same nest, moving: keep its number
+            col.NestSerial--;
+            from.MovingTo = n;
+            var nd = nests[n];
+            nd.Moving = 1;
+            nd.SquadCount = nests[k].SquadCount;
+            nd.DistressResponse = nests[k].DistressResponse;
+            nests[n] = nd;
+
+            Ant q = ants[qi];
+            q.Nest = (byte)n;
+            ants[qi] = q;
+            queenIndex[k] = -1;
+            queenIndex[n] = qi;
+            queenPos[n] = q.Position;
+            int guards = col.Abstract ? 0 : nestSoldiers[k];
+            if (!col.Abstract) ReassignNest(c, k, n, 100, false);
+            if (c == Player)
+                Notify($"Nest {from.Number} is moving house. The queen is walking to the new site" +
+                       (guards > 0 ? $" with {guards} soldiers round her" : ", with no soldiers to guard her") + ": keep her safe!");
+            return null;
+        }
+
+        /// <summary>Each tick: follow moving queens; settle the new nest when she arrives (or the move fails).</summary>
+        void UpdateMoves(float dt)
+        {
+            for (int n = 0; n < nestHigh; n++)
+            {
+                var info = nestInfo[n];
+                if (info == null || info.MovingFrom < 0) continue;
+                info.MoveTime += dt;
+                int qi = queenIndex[n];
+                bool alive = qi >= 0 && qi < ants.Length && ants[qi].Dead == 0 && ants[qi].Caste == (byte)Caste.Queen && ants[qi].Nest == n;
+                if (!alive) { FinishMove(n, false); continue; }
+                Ant q = ants[qi];
+                queenPos[n] = q.Position;
+                bool there = math.distance(q.Position, nests[n].Position) < sim.NestRadius;
+                if (!there && info.MoveTime > MoveTimeout)
+                {
+                    // Stuck somewhere: she finds her way in the end.
+                    q.Position = nests[n].Position;
+                    ants[qi] = q;
+                    there = true;
+                }
+                if (there) FinishMove(n, true);
+            }
+        }
+
+        void FinishMove(int n, bool queenArrived)
+        {
+            var info = nestInfo[n];
+            int c = info.Colony;
+            var col = Colonies[c];
+            int k = info.MovingFrom;
+            var old = GetNest(k);
+            if (old != null && old.Colony == c && old.MovingTo == n)
+            {
+                // Everyone left behind (and anyone hatched there meanwhile) follows.
+                if (col.Abstract) { info.SleepShare += old.SleepShare; old.SleepShare = 0f; }
+                else ReassignNest(c, k, n, 100, true);
+                bool primary = col.PrimaryNest == k;
+                FreeNest(k);
+                if (primary) col.PrimaryNest = n;
+            }
+            info.MovingFrom = -1;
+            info.Founding = false;
+            info.FoundedAt = SimTime;
+            info.MoveRetry = 60f;
+            var nd = nests[n];
+            nd.Founding = 0;
+            nd.Moving = 0;
+            nests[n] = nd;
+            if (c == Player)
+                Notify(queenArrived ? $"Nest {info.Number} has moved into its new home."
+                    : $"The queen of nest {info.Number} was killed on the way. Her ants settle at the new site without her.");
         }
 
         int SumAround(NativeArray<int> g, float2 p, int r)

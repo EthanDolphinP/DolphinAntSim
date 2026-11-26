@@ -54,6 +54,8 @@ namespace AntSim
         [ReadOnly] public NativeArray<float4> SquadSums;
         // Drone posts: [nest * NestData.MaxSites + i] = (x, y, kind 0 food source / 1 farm, score).
         [ReadOnly] public NativeArray<float4> Sites;
+        // Per nest: where its queen is. Soldiers of a nest that is moving house walk round her.
+        [ReadOnly] public NativeArray<float2> QueenPos;
         public float Time;
         [ReadOnly] public NativeArray<byte> Hostile; // [colony * MaxColonies + other]
         public int MaxColonies;
@@ -190,6 +192,8 @@ namespace AntSim
                 }
                 else if (queen)
                 {
+                    // Moving house: she walks to the new site, a good deal faster than her usual crawl.
+                    if (nest.Moving != 0) speed *= 2.5f;
                     // Stay in the heart of the nest.
                     if (nestDistSq > nest.Radius * nest.Radius * 0.25f)
                         a.Angle = TurnTowards(a.Angle, math.atan2(toNest.y, toNest.x), P.TurnSpeed * Dt);
@@ -1008,6 +1012,21 @@ namespace AntSim
         {
             if (a.State == AntState.Migrating)
             {
+                if (nest.Moving != 0)
+                {
+                    // Moving house: escort the queen, in a loose ring round her, at her pace.
+                    uint eh = math.hash(new uint2((uint)a.Squad * 131u + a.Role, 0xE5C0u));
+                    float ea = (eh & 1023) / 1023f * 2f * math.PI;
+                    float er = 4f + ((eh >> 10) & 7);
+                    float2 escort = QueenPos[a.Nest] + new float2(math.cos(ea), math.sin(ea)) * er;
+                    float2 dg = escort - a.Position;
+                    float dl = math.length(dg);
+                    if (dl > 1f) a.Angle = TurnTowards(a.Angle, math.atan2(dg.y, dg.x), P.TurnSpeed * Dt);
+                    a.Angle += rng.NextFloat(-1f, 1f) * P.Wander * 0.5f * Dt;
+                    speed *= dl < 3f ? 0.35f : dl < 10f ? 0.75f : 1.2f;
+                    if (dl > 3f) { navGoal = escort; hasNav = true; }
+                    return;
+                }
                 if (nestDistSq < nest.Radius * nest.Radius) a.State = AntState.Searching;
                 else a.Angle = TurnTowards(a.Angle, math.atan2(toNest.y, toNest.x), P.TurnSpeed * Dt);
                 a.Angle += rng.NextFloat(-1f, 1f) * P.Wander * 0.5f * Dt;

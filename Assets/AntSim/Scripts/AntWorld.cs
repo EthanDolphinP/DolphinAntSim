@@ -594,6 +594,7 @@ namespace AntSim
                 PrincessSpeed = swarm.PrincessSpeed,
                 MaleSpeed = swarm.MaleSpeed,
                 Sites = nestSites,
+                QueenPos = queenPos,
                 Accel = 1f - math.exp(-sim.Acceleration * dt),
                 Dt = dt,
                 TrailDecay = math.pow(0.5f, dt / sim.TrailHalfLife),
@@ -622,6 +623,7 @@ namespace AntSim
             h.Complete();
 
             UpdateNests(dt);
+            UpdateMoves(dt);
 
             for (int c = 0; c < colonyCount; c++)
                 UpdateColony(c, dt);
@@ -1334,8 +1336,8 @@ namespace AntSim
             if (Input.GetKeyDown(KeyCode.Tab)) FocusColony = (FocusColony + 1) % colonyCount;
             if (Input.GetKeyDown(KeyCode.P)) PheromoneView = (PheromoneView + 1) % 3;
             if (Input.GetKeyDown(KeyCode.X)) CancelRaid(CommandColony);
-            if (Input.GetKeyDown(KeyCode.F)) { PlacingFarm = !PlacingFarm; PlacingNest = false; PlacingDefence = -1; }
-            if (Input.GetKeyDown(KeyCode.N)) { PlacingNest = !PlacingNest; PlacingFarm = false; PlacingDefence = -1; }
+            if (Input.GetKeyDown(KeyCode.F)) { PlacingFarm = !PlacingFarm; PlacingNest = false; PlacingDefence = -1; PlacingMove = -1; }
+            if (Input.GetKeyDown(KeyCode.N)) { PlacingNest = !PlacingNest; PlacingFarm = false; PlacingDefence = -1; PlacingMove = -1; }
             if (Input.GetKeyDown(KeyCode.G)) Notify(UpgradeGarden(CommandColony) ?? "Fungus garden upgraded.");
             if (Input.GetKeyDown(KeyCode.B))
             {
@@ -1356,7 +1358,13 @@ namespace AntSim
             if (Input.GetKeyDown(KeyCode.R)) OrderRaid(CommandColony, mouse);
 
             if (AntSimHud.IsMouseOverUi()) return;
-            if (PlacingDefence >= 0 && Input.GetMouseButtonDown(0))
+            if (PlacingMove >= 0 && Input.GetMouseButtonDown(0))
+            {
+                string err = MoveNest(CommandColony, PlacingMove, SnapNestSite(CommandColony, mouse));
+                if (err != null) Notify(err);
+                else PlacingMove = -1;
+            }
+            else if (PlacingDefence >= 0 && Input.GetMouseButtonDown(0))
             {
                 string err = PlaceDefence(CommandColony, PlacingDefence, mouse);
                 Notify(err ?? $"{DefenceNames[PlacingDefence]} built.");
@@ -1374,7 +1382,7 @@ namespace AntSim
                 Notify(err ?? "Aphid farm placed. Your workers will collect its honeydew.");
                 if (err == null && !Input.GetKey(KeyCode.LeftShift)) PlacingFarm = false;
             }
-            else if (!PlacingFarm && !PlacingNest && PlacingDefence < 0 && Sandbox && Input.GetMouseButton(0))
+            else if (!PlacingFarm && !PlacingNest && PlacingDefence < 0 && PlacingMove < 0 && Sandbox && Input.GetMouseButton(0))
             {
                 PlaceFood(mouse, 3, foodPerCell);
             }

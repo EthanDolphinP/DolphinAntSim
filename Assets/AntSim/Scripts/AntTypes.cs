@@ -167,6 +167,7 @@ namespace AntSim
         public byte DronePercent;     // soldiers with Role below this are drones (escorts)
         public byte DroneSquadCount;  // drones are split into this many squads (1..MaxDroneSquads)
         public byte SiteCount;        // harvest sites and farms the drones guard (in AntWorld's site table)
+        public byte Moving;           // the colony is moving house to here: the queen is walking over (fills padding)
 
         public const int MaxSquads = 32;      // squad slots per nest: guard squads first, then drone squads
         public const int MaxGuardSquads = 24;
@@ -606,6 +607,7 @@ namespace AntSim
         public int SwarmAt = 1200;
         [Tooltip("Nesting rule: never own more nests than this.")]
         public int MaxNests = 5;
+        public bool AutoMoveTree = true; // termites: move house to another tree when theirs is dying
         public int SwarmState;            // 0 none, 1 raising a princess, 2 princess in flight
         public float SwarmProgress;       // 0..1 while raising
         public Vector2 SwarmTarget;

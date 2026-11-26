@@ -193,6 +193,9 @@ namespace AntSim
                 if (!SpeciesOf(c).TreeNester) continue;
                 var col = Colonies[c];
                 var t = TreeAt(nests[k].Position, 4f);
+                // A dying, dead or fallen tree: the queen leads the nest to a healthy tree nearby.
+                if (info.HasQueen && info.MovingTo < 0 && (col.AutoMoveTree || c != Player) && NestTreeHealth(k) < 0.25f)
+                    TryMoveToNewTree(c, k, dt);
                 if (t == null)
                 {
                     col.ExposedNests++;
@@ -214,7 +217,9 @@ namespace AntSim
                 if (c == Player && !t.Warned && !t.Dead && NestTreeHealth(k) < 0.35f)
                 {
                     t.Warned = true;
-                    Notify($"The tree holding nest {info.Number} is nearly eaten out. Time to found a nest in another tree (Nests tab).");
+                    Notify(col.AutoMoveTree
+                        ? $"The tree holding nest {info.Number} is nearly eaten out. The queen will soon lead the nest to another tree."
+                        : $"The tree holding nest {info.Number} is nearly eaten out. Move the nest to another tree (Nests tab).");
                 }
             }
             for (int c = 0; c < colonyCount; c++)
@@ -310,15 +315,6 @@ namespace AntSim
             return t == null || t.Dead ? 0f : t.Health * math.saturate((t.Lifespan - t.Age) / 600f);
         }
 
-        /// <summary>A termite colony with a nest whose tree is dying needs to move.</summary>
-        bool NeedsNewTree(int c)
-        {
-            if (!SpeciesOf(c).TreeNester) return false;
-            for (int k = 0; k < nestHigh; k++)
-                if (nestInfo[k] != null && nestInfo[k].Colony == c && !nestInfo[k].Founding && NestTreeHealth(k) < 0.35f) return true;
-            return false;
-        }
-
         /// <summary>Termites: a clicked spot means the tree there.</summary>
         public float2 SnapNestSite(int c, float2 p)
         {
@@ -338,6 +334,43 @@ namespace AntSim
             for (int k = 0; k < nestHigh; k++)
                 if (nestInfo[k] != null && math.distance(nests[k].Position, t.Position) < 4f) return "Another nest is already in that tree.";
             return null;
+        }
+
+        /// <summary>Termites: look for a healthy tree within a queen's walk of nest k, and move there.</summary>
+        void TryMoveToNewTree(int c, int k, float dt)
+        {
+            var info = nestInfo[k];
+            info.MoveRetry -= dt;
+            if (info.MoveRetry > 0f || MoveInProgress(c) >= 0) return;
+            info.MoveRetry = 15f;
+            Tree best = null;
+            float bestScore = float.MinValue;
+            foreach (var t in trees)
+            {
+                float2 p = t.Position;
+                if (ValidateMoveSite(c, k, p) != null) continue;
+                float d = math.distance(p, nests[k].Position);
+                float score = t.Health * 200f + math.min(t.Lifespan - t.Age, 3600f) * 0.05f - d * 0.8f;
+                for (int j = 0; j < nestHigh; j++)
+                {
+                    var other = nestInfo[j];
+                    if (other == null || other.Colony == c || !IsAtWar(c, other.Colony)) continue;
+                    float e = math.distance(p, nests[j].Position);
+                    if (e < 220f) score -= (220f - e) * 3f;
+                }
+                if (score > bestScore) { bestScore = score; best = t; }
+            }
+            if (best == null)
+            {
+                if (c == Player && !info.NoTreeWarned)
+                {
+                    info.NoTreeWarned = true;
+                    Notify($"There's no healthy tree within a queen's walk ({MoveMaxDistance:0}) of nest {info.Number}. " +
+                           "Found a nest further away with a princess (Nests tab) before the tree falls.");
+                }
+                return;
+            }
+            MoveNest(c, k, best.Position, true);
         }
 
         /// <summary>The best tree for a termite colony's next nest.</summary>

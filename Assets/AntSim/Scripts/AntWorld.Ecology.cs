@@ -441,6 +441,37 @@ namespace AntSim
         /// Simple rival colonies: build a garden and farms when they can afford it, hunt beetles,
         /// keep soldiers up when attacked, and raid weaker neighbours once they're strong.
         /// </summary>
+        void RivalFlee(int c, ColonyInfo col)
+        {
+            if (MoveInProgress(c) >= 0 || col.Food < MoveCost) return;
+            float maxHp = combat.QueenHealth * SpeciesOf(c).Health;
+            for (int k = 0; k < nestHigh; k++)
+            {
+                var info = nestInfo[k];
+                if (info == null || info.Colony != c || info.Founding || !info.HasQueen || info.MovingTo >= 0) continue;
+                if (info.QueenHealth > maxHp * 0.35f) continue;
+                // Who is raiding it?
+                int raider = -1;
+                for (int o = 0; o < colonyCount; o++)
+                {
+                    var other = Colonies[o];
+                    if (o == c || other.Extinct || !other.RaidActive) continue;
+                    if (math.distance((float2)other.RaidTarget, nests[k].Position) < 40f) { raider = o; break; }
+                }
+                if (raider < 0) continue;
+                float2 away = nests[k].Position - NestPos(raider);
+                float2 dir = math.lengthsq(away) > 1f ? math.normalize(away) : rng.NextFloat2Direction();
+                for (int attempt = 0; attempt < 16; attempt++)
+                {
+                    float turn = (attempt % 2 == 0 ? 1f : -1f) * (attempt / 2) * 0.35f;
+                    math.sincos(turn, out float sn, out float cs);
+                    float2 d = new float2(dir.x * cs - dir.y * sn, dir.x * sn + dir.y * cs);
+                    float2 site = SnapNestSite(c, nests[k].Position + d * rng.NextFloat(90f, MoveMaxDistance * 0.95f));
+                    if (MoveNest(c, k, site) == null) return;
+                }
+            }
+        }
+
         void RivalAI(int c, float dt)
         {
             var col = Colonies[c];
@@ -461,6 +492,9 @@ namespace AntSim
 
             // Defences around home once there's food to spare (and sooner when attacked).
             RivalDefences(c, col, reserve);
+
+            // A nest under a raid whose queen is badly hurt moves house, away from the raiders.
+            RivalFlee(c, col);
 
             // Aphid farms on bushes near home.
             int wantFarms = 1 + pop / 350;

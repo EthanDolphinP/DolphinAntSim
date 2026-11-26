@@ -116,10 +116,11 @@ namespace AntSim
                 var es = UnityEngine.EventSystems.EventSystem.current;
                 if (IsTyping && es != null) es.SetSelectedGameObject(null);
                 else if (menuOpen) { if (menuPage != MenuPage.Main) menuPage = MenuPage.Main; else SetMenu(false); }
-                else if (world.PlacingFarm || world.PlacingNest || world.PlacingDefence >= 0)
+                else if (world.PlacingFarm || world.PlacingNest || world.PlacingDefence >= 0 || world.PlacingMove >= 0)
                 {
                     world.PlacingFarm = world.PlacingNest = false;
                     world.PlacingDefence = -1;
+                    world.PlacingMove = -1;
                 }
                 else SetMenu(true);
             }
@@ -292,7 +293,7 @@ namespace AntSim
                 { raided = true; raider = other.Name; raidedAt = world.GetNest(near).Position; }
             }
             bool toast = !string.IsNullOrEmpty(world.Toast) && Time.unscaledTime - world.ToastTime < 5f;
-            bool placing = world.PlacingFarm || world.PlacingNest || world.PlacingDefence >= 0;
+            bool placing = world.PlacingFarm || world.PlacingNest || world.PlacingDefence >= 0 || world.PlacingMove >= 0;
 
             alert.Visible = dying || raided || toast || placing;
             if (!alert.Visible) return;
@@ -301,7 +302,15 @@ namespace AntSim
             alert.Rect.anchoredPosition = new Vector2(0f, -(BarHeight + 4f));
 
             ui.Begin(alert);
-            if (world.PlacingDefence >= 0)
+            if (world.PlacingMove >= 0)
+            {
+                var moving = world.GetNest(world.PlacingMove);
+                ui.Label(world.SpeciesOf(c).TreeNester
+                    ? $"Click a healthy tree within {AntWorld.MoveMaxDistance:0} of nest {moving?.Number} to move there ({AntWorld.MoveCost:0} food). Esc to cancel."
+                    : $"Click the new site for nest {moving?.Number}, within {AntWorld.MoveMaxDistance:0} of it ({AntWorld.MoveCost:0} food). Esc to cancel.",
+                    labelSmall);
+            }
+            else if (world.PlacingDefence >= 0)
             {
                 int kind = world.PlacingDefence;
                 ui.Label(kind == (int)DefenceKind.Fortified
@@ -564,14 +573,16 @@ namespace AntSim
             {
                 var n = world.GetNest(k);
                 if (n == null || n.Colony != c) continue;
-                string state = n.Founding ? "<color=#e6c35c>princess on her way</color>"
+                string state = n.MovingFrom >= 0 ? $"<color=#e6c35c>new site: the queen is on her way</color> ({n.MoveTime:0}s)"
+                    : n.MovingTo >= 0 ? "<color=#e6c35c>moving out</color>"
+                    : n.Founding ? "<color=#e6c35c>princess on her way</color>"
                     : n.HasQueen ? $"queen {n.QueenHealth:0} hp"
                     : f.Queens > 0 ? $"<color=#f0a05a>no queen</color> - abandoned in {Mathf.Max(0f, sw.AbandonTime - n.QueenlessTime):0}s"
                     : "<color=#e07a6a>no queen</color>";
                 string main = k == f.PrimaryNest ? " (main)" : "";
                 string ants = f.Abstract ? $"~{n.SleepShare:P0} of ants" : $"{n.Ants:N0} ants";
                 string tree = "";
-                if (world.SpeciesOf(c).TreeNester && !n.Founding)
+                if (world.SpeciesOf(c).TreeNester && !n.Founding && n.MovingTo < 0)
                 {
                     float wood = world.NestTreeHealth(k);
                     tree = world.TreeAt(n.Position, 4f) == null ? "   <color=#e07a6a>tree fallen!</color>"
@@ -581,17 +592,40 @@ namespace AntSim
                 string walls = world.IsFortified(k) ? "   fortified" : "";
                 ui.BeginRow();
                 ui.Label($"<b>Nest {n.Number}</b>{main}   {ants}   {state}{tree}{walls}", label);
+                if (!n.Founding && n.MovingTo < 0)
+                {
+                    bool picking = world.PlacingMove == k;
+                    if (ui.Button(picking ? "Cancel" : "Move", picking ? tabOn : button, 64))
+                    {
+                        string err = picking ? null : world.MoveBlocker(c, k);
+                        if (err != null) world.Notify(err);
+                        else
+                        {
+                            world.PlacingMove = picking ? -1 : k;
+                            world.PlacingNest = world.PlacingFarm = false;
+                            world.PlacingDefence = -1;
+                        }
+                    }
+                }
                 if (ui.Button("Go", button, 44)) world.LookAt(n.Position);
                 ui.EndRow();
             }
             if (world.SpeciesOf(c).TreeNester)
+            {
                 ui.Label("Termites live inside trees and eat them: a nest finishes its tree in 35 to 100 minutes, faster " +
-                         "the bigger the nest. A dead tree stands for 10 more minutes, then falls, and a queen left " +
-                         "outside dies within minutes. Found the next nest in a healthy tree in good time. " +
+                         "the bigger the nest. When the tree is nearly eaten out the queen leads the nest to a healthy tree " +
+                         $"within {AntWorld.MoveMaxDistance:0} (if there is one). A dead tree stands for 10 more minutes, then falls, " +
+                         "and a queen still inside it then dies within minutes. " +
                          $"Wood feeds the colony <b>{f.WoodIncome:0.0} food/s</b>.", labelSmall);
+                f.AutoMoveTree = ui.Toggle(f.AutoMoveTree, "Move to a new tree when ours is dying", toggle);
+            }
             ui.Label("Food and brood are shared by all nests. Every nest with a queen lays eggs; " +
                      "new ants hatch in nests that have a queen.", labelSmall);
 
+            ui.Label($"<b>Move</b> a nest ({AntWorld.MoveCost:0} food): the queen walks to the new site (up to " +
+                     $"{AntWorld.MoveMaxDistance:0} away) with the nest's soldiers round her, and the workers go ahead. The old " +
+                     "nest is given up when she arrives. She's out in the open on the way: if she's killed, her ants settle " +
+                     "at the new site without her. Use it to get away from a rival, closer to food, or out of a dying tree.", labelSmall);
             ui.Space(8);
             ui.Label("Found a new nest", header);
             ui.Label($"The colony raises a princess ({sw.Cost:0} food, {sw.PrincessTime:0}s). She then flies to the site " +
@@ -620,6 +654,7 @@ namespace AntSim
                     world.PlacingNest = !world.PlacingNest;
                     world.PlacingFarm = false;
                     world.PlacingDefence = -1;
+                    world.PlacingMove = -1;
                 }
                 if (ui.Button("Let scouts choose", button))
                 {
@@ -686,7 +721,7 @@ namespace AntSim
             ui.Label($"Farms: {f.AphidFarms}   Honeydew <b>{f.FarmIncome:0.0}/s</b>", label);
             if (ui.Button(world.PlacingFarm ? "Cancel placing" : $"Place aphid farm ({world.FarmCost(c):0} food)  [F]", world.PlacingFarm ? tabOn : button))
             {
-                world.PlacingFarm = !world.PlacingFarm;
+                world.PlacingFarm = !world.PlacingFarm; world.PlacingMove = -1;
                 world.PlacingNest = false;
                 world.PlacingDefence = -1;
             }
@@ -720,7 +755,7 @@ namespace AntSim
                 if (ui.Button(on ? "Cancel" : $"{verb} ({world.DefenceCost(kind):0} food)", on ? tabOn : button))
                 {
                     world.PlacingDefence = on ? -1 : kind;
-                    world.PlacingFarm = world.PlacingNest = false;
+                    world.PlacingFarm = world.PlacingNest = false; world.PlacingMove = -1;
                 }
             }
             if (f.Captured > 0 || world.SpeciesOf(c).Captives > 0f)
@@ -891,7 +926,7 @@ namespace AntSim
                 "Pale yellow, slim ants: scouts.  Pale blue soldiers: drones (escorts).\n" +
                 "Bigger or smaller ants of your colour: castes (majors, minims...). See the Orders tab.\n" +
                 "Big white-rimmed ant: queen.  Grey nest rim: no queen.\n" +
-                "Gold winged ant: princess.  Small dark winged ants: males (swarm).  Dashed ring: a nest being founded.\n" +
+                "Gold winged ant: princess.  Small dark winged ants: males (swarm).  Dashed ring: a nest being founded or moved into.\n" +
                 "Amber blobs: resin traps.  Earth mound with a ring: stinger mound.  Stone rim: fortified nest.\n" +
                 "Prey: red dots are mites, green shells beetles, green stripy worms caterpillars, brown hoppers crickets, " +
                 "grey banded ovals woodlice.\n" +
