@@ -17,6 +17,7 @@ MonoBehaviour:
   Description: Balanced seed gatherers. Foragers bring home 25% more food per trip,
     and big-headed majors carry double.
   Shape: 1
+  Difficulty: 0
   Speed: 1
   Health: 1
   Damage: 1

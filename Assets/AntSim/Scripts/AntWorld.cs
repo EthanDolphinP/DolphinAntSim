@@ -244,7 +244,8 @@ namespace AntSim
             deliveredLeaves = new NativeArray<int>(slots, Allocator.Persistent);
             nests = new NativeArray<NestData>(MaxNests, Allocator.Persistent);
             starveRates = new NativeArray<float>(slots, Allocator.Persistent);
-            casteCounts = new NativeArray<int>(slots * Castes.Count, Allocator.Persistent);
+            // Wildlife keeps its kind in the caste field, and there are more kinds of bug than castes.
+            casteCounts = new NativeArray<int>(slots * Castes.Count + WildKinds.Count, Allocator.Persistent);
             queenIndex = new NativeArray<int>(MaxNests, Allocator.Persistent);
             for (int n = 0; n < MaxNests; n++) queenIndex[n] = -1;
             AllocateNestArrays();
@@ -295,6 +296,7 @@ namespace AntSim
             takenRef = new NativeReference<int>(Allocator.Persistent);
 
             AllocateEcology();
+            AllocateNature();
             AllocateDiplomacy();
             if (pendingLoad != null)
             {
@@ -505,7 +507,8 @@ namespace AntSim
                 nest.RaidTarget = col.RaidTarget;
                 nest.HasQueen = (byte)(info.HasQueen || info.Founding ? 1 : 0);
                 nest.CoreRadius = math.max(lod.MinTerritory, col.TerritoryRadius * lod.CoreFraction);
-                nest.GatherLeaves = (byte)(col.GardenLevel > 0 && col.Leaves < farming.LeafStorePerLevel * col.GardenLevel ? 1 : 0);
+                nest.GatherLeaves = (byte)(SpeciesOf(info.Colony).LeafEater
+                    || (col.GardenLevel > 0 && col.Leaves < farming.LeafStorePerLevel * col.GardenLevel) ? 1 : 0);
                 nest.DistressResponse = (byte)math.clamp((int)math.round(col.DistressResponse * 100f), 0, 100);
                 nest.ScoutPercent = (byte)math.clamp((int)math.round(col.ScoutShare * 100f), 0, 100);
                 nest.DronePercent = (byte)math.clamp((int)math.round(col.DroneShare * 100f), 0, 100);
@@ -545,6 +548,7 @@ namespace AntSim
                 WildColony = WildColony,
                 PairDamage = (int*)pairDamage.GetUnsafePtr(),
             }.Schedule(n, 512, h);
+            h = ScheduleDefences(h, dt);
 
             EnsureHomeFields();
             var step = new AntStepJob
@@ -660,8 +664,15 @@ namespace AntSim
             deliveredLeaves[c] = 0;
             col.Food += got * economy.FoodPerDelivery * sp.ForageYield;
             col.TotalDelivered += got;
-            col.Leaves += gotLeaves;
             col.LeavesDelivered += gotLeaves;
+            if (sp.LeafEater)
+            {
+                // Eaten straight away, no garden needed.
+                float leafFood = gotLeaves * farming.FoodPerLeaf * sp.GardenYield;
+                col.Food += leafFood;
+                col.LeafIncome = math.lerp(col.LeafIncome, leafFood / dt, math.saturate(dt / 5f));
+            }
+            else col.Leaves += gotLeaves;
             col.CombatDeaths += combatDeaths[c];
             // Only fighting near the nest keeps a colony awake; border skirmishes don't.
             if (coreCombatDeaths[c] > 0) col.LastCombatTime = SimTime;
@@ -1322,10 +1333,14 @@ namespace AntSim
             if (Input.GetKeyDown(KeyCode.Tab)) FocusColony = (FocusColony + 1) % colonyCount;
             if (Input.GetKeyDown(KeyCode.P)) PheromoneView = (PheromoneView + 1) % 3;
             if (Input.GetKeyDown(KeyCode.X)) CancelRaid(CommandColony);
-            if (Input.GetKeyDown(KeyCode.F)) { PlacingFarm = !PlacingFarm; PlacingNest = false; }
-            if (Input.GetKeyDown(KeyCode.N)) { PlacingNest = !PlacingNest; PlacingFarm = false; }
+            if (Input.GetKeyDown(KeyCode.F)) { PlacingFarm = !PlacingFarm; PlacingNest = false; PlacingDefence = -1; }
+            if (Input.GetKeyDown(KeyCode.N)) { PlacingNest = !PlacingNest; PlacingFarm = false; PlacingDefence = -1; }
             if (Input.GetKeyDown(KeyCode.G)) Notify(UpgradeGarden(CommandColony) ?? "Fungus garden upgraded.");
-            if (Input.GetKeyDown(KeyCode.B)) Notify(HuntNearest(CommandColony, WildKind.Beetle) ?? "Soldiers sent to hunt a beetle.");
+            if (Input.GetKeyDown(KeyCode.B))
+            {
+                string err = HuntNearestOf(CommandColony, WildKinds.BigPrey, "No big prey around right now.", out var prey);
+                Notify(err ?? $"Soldiers sent to hunt a {WildKinds.Name(prey)}.");
+            }
             if (Sandbox)
             {
                 if (Input.GetKeyDown(KeyCode.T)) SpawnAnts(FocusColony, 25000, Caste.Worker, 40f);
@@ -1340,9 +1355,15 @@ namespace AntSim
             if (Input.GetKeyDown(KeyCode.R)) OrderRaid(CommandColony, mouse);
 
             if (AntSimHud.IsMouseOverUi()) return;
-            if (PlacingNest && Input.GetMouseButtonDown(0))
+            if (PlacingDefence >= 0 && Input.GetMouseButtonDown(0))
             {
-                string err = StartSwarm(CommandColony, mouse);
+                string err = PlaceDefence(CommandColony, PlacingDefence, mouse);
+                Notify(err ?? $"{DefenceNames[PlacingDefence]} built.");
+                if (err == null && !Input.GetKey(KeyCode.LeftShift)) PlacingDefence = -1;
+            }
+            else if (PlacingNest && Input.GetMouseButtonDown(0))
+            {
+                string err = StartSwarm(CommandColony, SnapNestSite(CommandColony, mouse));
                 Notify(err ?? "Raising a princess. When she's ready she'll fly to the new site with an escort.");
                 if (err == null) PlacingNest = false;
             }
@@ -1352,7 +1373,7 @@ namespace AntSim
                 Notify(err ?? "Aphid farm placed. Your workers will collect its honeydew.");
                 if (err == null && !Input.GetKey(KeyCode.LeftShift)) PlacingFarm = false;
             }
-            else if (!PlacingFarm && !PlacingNest && Sandbox && Input.GetMouseButton(0))
+            else if (!PlacingFarm && !PlacingNest && PlacingDefence < 0 && Sandbox && Input.GetMouseButton(0))
             {
                 PlaceFood(mouse, 3, foodPerCell);
             }
@@ -1469,6 +1490,8 @@ namespace AntSim
             for (int c = 0; c < colonyCount; c++)
                 gardenLevels[c] = Colonies[c].GardenLevel / (float)FarmingParams.MaxGarden;
             int farmCount = FillFarmData();
+            int treeCount = FillTreeData();
+            int defenceCount = FillDefenceData();
 
             var pixels = groundTexture.GetPixelData<Color32>(0);
             var overlay = new OverlayJob
@@ -1476,6 +1499,7 @@ namespace AntSim
                 Pheromones = pheromones,
                 Food = food,
                 Leaves = leaves,
+                PlantCap = plantCap,
                 Terrain = terrain,
                 ColonyColors = colonyColors,
                 Pixels = pixels,
@@ -1493,10 +1517,15 @@ namespace AntSim
                 ColonyColors = colonyColors,
                 Farms = farmData,
                 GardenLevels = gardenLevels,
+                Trees = treeData,
+                Defences = defenceData,
                 Grid = grid,
                 NestCount = nestHigh,
                 FarmCount = farmCount,
+                TreeCount = treeCount,
+                DefenceCount = defenceCount,
                 Focus = FocusColony,
+                TrunkRadius = TrunkRadius,
             }.Schedule(overlay).Complete();
             groundTexture.Apply(false);
         }
@@ -1591,6 +1620,7 @@ namespace AntSim
             if (removedAges.IsCreated) removedAges.Dispose();
             if (takenRef.IsCreated) takenRef.Dispose();
             DisposeEcology();
+            DisposeNature();
             DisposeDiplomacy();
             antBuffer?.Release();
             antBuffer = null;

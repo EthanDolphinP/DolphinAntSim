@@ -292,6 +292,8 @@ namespace AntSim
             if (p.x < margin || p.y < margin || p.x > grid.WorldSize.x - margin || p.y > grid.WorldSize.y - margin)
                 return "Too close to the edge of the map.";
             if (!AreaClear(p, sim.NestRadius * 2.5f)) return "Ants can't nest on rock or water.";
+            string treeErr = TreeSiteError(c, p);
+            if (treeErr != null) return treeErr;
             float nearestOwn = float.MaxValue;
             for (int k = 0; k < nestHigh; k++)
             {
@@ -368,7 +370,9 @@ namespace AntSim
         {
             if (!col.AutoSwarm || col.SwarmCooldown > 0f) return;
             int cap = math.min(col.MaxNests, swarm.MaxNestsPerColony);
-            if (col.NestCount >= cap || col.Population < col.SwarmAt * col.NestCount) return;
+            // Termites whose tree is dying move out whatever their numbers (an extra nest is allowed for it).
+            bool mustMove = NeedsNewTree(c) && col.NestCount < swarm.MaxNestsPerColony;
+            if (!mustMove && (col.NestCount >= cap || col.Population < col.SwarmAt * col.NestCount)) return;
             float reserve = col.Population * economy.UpkeepPerAntPerSecond * economy.FoodReserveSeconds;
             if (col.Food < swarm.Cost + reserve) return;
             col.SwarmCooldown = 20f; // don't search for a site every second
@@ -490,6 +494,7 @@ namespace AntSim
         public bool FindNestSite(int c, out float2 site)
         {
             site = default;
+            if (SpeciesOf(c).TreeNester) return FindTreeSite(c, out site);
             float bestScore = float.MinValue;
             int ownNests = 0;
             for (int k = 0; k < nestHigh; k++)

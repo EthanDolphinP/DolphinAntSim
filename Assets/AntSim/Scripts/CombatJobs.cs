@@ -140,9 +140,9 @@ namespace AntSim
                 r.TargetAngle = math.atan2(to.y, to.x);
                 Ant target = Ants[best];
                 r.TargetKind = (byte)(target.Colony == WildColony ? 1 + target.Caste : 0);
-                // Big bugs have long legs: they reach a bit further.
-                float reach = wild && a.Caste != (byte)WildKind.Mite ? C.AttackRange * 1.8f : C.AttackRange;
-                if (target.Colony == WildColony && target.Caste != (byte)WildKind.Mite) reach = C.AttackRange * 1.8f;
+                // Big bugs have long legs: they reach a bit further. Antlions and centipedes further still.
+                float reach = wild ? Reach(a.Caste) : C.AttackRange;
+                if (target.Colony == WildColony) reach = math.max(reach, Reach(target.Caste));
                 if (bestD <= reach * reach)
                 {
                     r.InRange = 1;
@@ -161,5 +161,10 @@ namespace AntSim
 
             Results[i] = r;
         }
+
+        float Reach(int kind) =>
+            WildKinds.IsSmall(kind) ? C.AttackRange
+            : kind == (int)WildKind.Antlion || kind == (int)WildKind.Centipede ? C.AttackRange * 2.4f
+            : C.AttackRange * 1.8f;
     }
 }

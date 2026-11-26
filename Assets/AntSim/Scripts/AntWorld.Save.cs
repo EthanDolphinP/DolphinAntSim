@@ -31,7 +31,8 @@ namespace AntSim
     public unsafe partial class AntWorld
     {
         const string SaveMagic = "ANTSAVE";
-        const int SaveVersion = 1;
+        const int SaveVersion = 2;      // 2: trees and defences
+        const int OldestSaveVersion = 1;
         public const string SaveExtension = ".antsave";
         public const string AutosaveName = "Autosave";
 
@@ -196,6 +197,11 @@ namespace AntSim
             foreach (var f in farms) WriteFields(w, f);
             w.Write(bushes.Count);
             foreach (var b in bushes) { w.Write(b.x); w.Write(b.y); w.Write(b.z); }
+            w.Write(treeTarget); w.Write(saplingTimer);
+            w.Write(trees.Count);
+            foreach (var t in trees) WriteFields(w, t);
+            w.Write(defences.Count);
+            foreach (var d in defences) WriteFields(w, d);
 
             // Grids and the ants.
             WriteNative(w, ants.AsArray());
@@ -234,11 +240,14 @@ namespace AntSim
 
         // ------------------------------------------------------------------ reading
 
-        static GameSetup ReadHeader(BinaryReader r, out string summary)
+        static GameSetup ReadHeader(BinaryReader r, out string summary) => ReadHeader(r, out summary, out _);
+
+        static GameSetup ReadHeader(BinaryReader r, out string summary, out int version)
         {
             if (r.ReadString() != SaveMagic) throw new InvalidDataException("not a save file");
-            int version = r.ReadInt32();
-            if (version != SaveVersion) throw new InvalidDataException($"save version {version}, expected {SaveVersion}");
+            version = r.ReadInt32();
+            if (version < OldestSaveVersion || version > SaveVersion)
+                throw new InvalidDataException($"save version {version}, this game reads {OldestSaveVersion} to {SaveVersion}");
             int antSize = r.ReadInt32();
             if (antSize != UnsafeUtility.SizeOf<Ant>()) throw new InvalidDataException("made by a different build of the game");
             summary = r.ReadString();
@@ -253,7 +262,7 @@ namespace AntSim
             using var file = File.OpenRead(path);
             using var gz = new GZipStream(file, CompressionMode.Decompress);
             using var r = new BinaryReader(gz);
-            ReadHeader(r, out _);
+            ReadHeader(r, out _, out int version);
 
             SimTime = r.ReadSingle(); tickIndex = r.ReadInt32(); rng.state = r.ReadUInt32();
             lodTimer = r.ReadSingle(); foodTimer = r.ReadSingle(); ecoTimer = r.ReadSingle(); aiTimer = r.ReadSingle();
@@ -294,6 +303,17 @@ namespace AntSim
             bushes.Clear();
             int bushCount = r.ReadInt32();
             for (int i = 0; i < bushCount; i++) bushes.Add(new float3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle()));
+            trees.Clear();
+            defences.Clear();
+            bool needTrees = version < 2;
+            if (!needTrees)
+            {
+                treeTarget = r.ReadInt32(); saplingTimer = r.ReadSingle();
+                int treeCount = r.ReadInt32();
+                for (int i = 0; i < treeCount; i++) { var t = new Tree(); ReadFields(r, t); trees.Add(t); }
+                int defenceCount = r.ReadInt32();
+                for (int i = 0; i < defenceCount; i++) { var d = new Defence(); ReadFields(r, d); defences.Add(d); }
+            }
 
             // The ant list.
             int antCount = PeekLength(r);
@@ -332,6 +352,7 @@ namespace AntSim
             // Counts, queens and squad centres as of now; trail maps for the workers' fear of rivals.
             MakeCompactJob().Run();
             EnsureDiplomacy(); // saves from before diplomacy have no relation arrays
+            if (needTrees) GenerateTrees(); // saves from before trees: grow some now
             new BusyTrailsJob { Pheromones = pheromones, Busy = busyTrails, Grid = grid, BusyW = busyW, BusyH = busyH }
                 .Schedule(busyTrails.Length, 4096).Complete();
         }

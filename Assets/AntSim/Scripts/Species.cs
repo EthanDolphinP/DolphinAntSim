@@ -31,40 +31,70 @@ namespace AntSim
             (byte)(r < cumulative.x ? 1 : r < cumulative.y ? 2 : r < cumulative.z ? 3 : 0);
     }
 
-    /// <summary>Tuning for the other bugs on the map.</summary>
+    /// <summary>One kind of bug's numbers.</summary>
+    [Serializable]
+    public struct WildStat
+    {
+        public float Health, Damage, Speed, Sense;
+        [Tooltip("Food left by the body.")]
+        public int Food;
+        [Tooltip("Seconds it lives.")]
+        public float Life;
+        [Tooltip("Animals per 10,000 square units at 'Normal' density.")]
+        public float Density;
+
+        public WildStat(float health, float damage, float speed, float sense, int food, float life, float density)
+        {
+            Health = health; Damage = damage; Speed = speed; Sense = sense; Food = food; Life = life; Density = density;
+        }
+    }
+
+    /// <summary>Tuning for the other bugs on the map (see <see cref="WildKind"/>).</summary>
     [Serializable]
     public struct WildlifeParams
     {
-        public float MiteHealth, BeetleHealth, SpiderHealth;
-        public float MiteDamage, BeetleDamage, SpiderDamage;
-        public float MiteSpeed, BeetleSpeed, SpiderSpeed;
-        public float MiteSense, BeetleSense, SpiderSense;
-        public int MiteFood, BeetleFood, SpiderFood;
-        public float MiteLife, BeetleLife, SpiderLife;
-        [Tooltip("Animals per 10,000 square units at 'Normal' density.")]
-        public float MiteDensity, BeetleDensity, SpiderDensity;
+        public WildStat Mite, Beetle, Spider, Caterpillar, Cricket, Woodlouse, Antlion, Assassin, Centipede;
         [Tooltip("Aphids a beetle eats per second when it reaches a farm.")]
         public float BeetleAphidAppetite;
 
         public static WildlifeParams Default => new WildlifeParams
         {
-            MiteHealth = 4f, BeetleHealth = 260f, SpiderHealth = 160f,
-            MiteDamage = 0.3f, BeetleDamage = 6f, SpiderDamage = 12f,
-            MiteSpeed = 3.5f, BeetleSpeed = 2.2f, SpiderSpeed = 7f,
-            MiteSense = 2.5f, BeetleSense = 1.6f, SpiderSense = 14f,
-            MiteFood = 5, BeetleFood = 120, SpiderFood = 70,
-            MiteLife = 300f, BeetleLife = 900f, SpiderLife = 1200f,
-            MiteDensity = 4f, BeetleDensity = 0.25f, SpiderDensity = 0.15f,
+            //                         health damage speed sense food  life  density
+            Mite =        new WildStat(4f,   0.3f, 3.5f,  2.5f,   5,  300f, 4f),
+            Beetle =      new WildStat(260f, 6f,   2.2f,  1.6f, 120,  900f, 0.25f),
+            Spider =      new WildStat(160f, 12f,  7f,   14f,    70, 1200f, 0.12f),
+            Caterpillar = new WildStat(45f,  0f,   1.2f,  1.5f,  45,  700f, 0.35f),
+            Cricket =     new WildStat(14f,  0.5f, 9f,    5f,    18,  500f, 0.6f),
+            Woodlouse =   new WildStat(90f,  0.5f, 1.8f,  1.5f,  30, 1000f, 0.5f),
+            Antlion =     new WildStat(120f, 9f,   0f,    3.5f,  50, 1800f, 1.2f), // per 10,000 of sand, not map
+            Assassin =    new WildStat(70f,  6f,   3f,    6f,    35,  900f, 0.14f),
+            Centipede =   new WildStat(420f, 18f,  9f,   12f,   160, 1500f, 0.04f),
             BeetleAphidAppetite = 4f,
         };
 
-        public float Health(int kind) => kind == 0 ? MiteHealth : kind == 1 ? BeetleHealth : SpiderHealth;
-        public float Damage(int kind) => kind == 0 ? MiteDamage : kind == 1 ? BeetleDamage : SpiderDamage;
-        public float Speed(int kind) => kind == 0 ? MiteSpeed : kind == 1 ? BeetleSpeed : SpiderSpeed;
-        public float Sense(int kind) => kind == 0 ? MiteSense : kind == 1 ? BeetleSense : SpiderSense;
-        public int Food(int kind) => kind == 0 ? MiteFood : kind == 1 ? BeetleFood : SpiderFood;
-        public float Life(int kind) => kind == 0 ? MiteLife : kind == 1 ? BeetleLife : SpiderLife;
-        public float Density(int kind) => kind == 0 ? MiteDensity : kind == 1 ? BeetleDensity : SpiderDensity;
+        public WildStat Get(int kind)
+        {
+            switch (kind)
+            {
+                case 0: return Mite;
+                case 1: return Beetle;
+                case 2: return Spider;
+                case 3: return Caterpillar;
+                case 4: return Cricket;
+                case 5: return Woodlouse;
+                case 6: return Antlion;
+                case 7: return Assassin;
+                default: return Centipede;
+            }
+        }
+
+        public float Health(int kind) => Get(kind).Health;
+        public float Damage(int kind) => Get(kind).Damage;
+        public float Speed(int kind) => Get(kind).Speed;
+        public float Sense(int kind) => Get(kind).Sense;
+        public int Food(int kind) => Get(kind).Food;
+        public float Life(int kind) => Get(kind).Life;
+        public float Density(int kind) => Get(kind).Density;
     }
 
     /// <summary>Food production tuning: plants, aphid farms and fungus gardens.</summary>

@@ -288,6 +288,7 @@ namespace AntSim
 
             // Losses inflicted by live ants since the last update (damage / typical health = ants).
             float antHp = (combat.WorkerHealth * 3f + combat.SoldierHealth) * 0.25f;
+            TakeCaptives(antHp);
             for (int c = 0; c < colonyCount; c++)
             {
                 var col = Colonies[c];
@@ -316,8 +317,10 @@ namespace AntSim
                     }
                     col.Opinion[o] = math.clamp(col.Opinion[o] + change * dt, -100f, 100f);
                 }
-                for (int x = 0; x < MaxColonies; x++) pairDamage[c * MaxColonies + x] = 0;
             }
+            // Clear afterwards: each colony's row is read again for every victim above.
+            for (int c = 0; c < colonyCount; c++)
+                for (int x = 0; x < MaxColonies; x++) pairDamage[c * MaxColonies + x] = 0;
 
             // Truces run out.
             for (int a = 0; a < colonyCount; a++)

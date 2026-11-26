@@ -83,7 +83,9 @@ namespace AntSim
             bool wild = a.Colony == WildColony;
 
             // --- Combat results ---
-            a.Health -= Damage[i] * 0.01f;
+            // A woodlouse rolled up in its armour (it rolls up as soon as it's attacked) shrugs off most bites.
+            bool rolled = wild && a.Caste == (byte)WildKind.Woodlouse && Combat[i].Engaged != 0;
+            a.Health -= Damage[i] * (rolled ? 0.004f : 0.01f);
             if (a.Health <= 0f)
             {
                 a.Dead = 1;
@@ -144,9 +146,10 @@ namespace AntSim
                     : male ? MaleSpeed : P.WorkerSpeed) * Stats[a.Colony].SpeedMul
                     * Morphs[a.Colony * MorphStats.MaxMorphs + a.Morph].SpeedMul;
 
-                bool fleeSpider = !soldier && !queen && !princess && cr.Engaged != 0 &&
-                                  cr.TargetKind == 1 + (int)WildKind.Spider &&
-                                  nestDistSq > nest.Radius * nest.Radius * 9f;
+                // Workers run from predators away from home (and always from a centipede).
+                bool fleeSpider = !soldier && !queen && !princess && cr.Engaged != 0 && cr.TargetKind > 0 &&
+                                  WildKinds.IsPredator(cr.TargetKind - 1) &&
+                                  (nestDistSq > nest.Radius * nest.Radius * 9f || cr.TargetKind == 1 + (int)WildKind.Centipede);
                 if (male)
                 {
                     // Winged males swirl around the swarm's flight path, then drop out and die.
@@ -163,7 +166,7 @@ namespace AntSim
                 }
                 else if (fleeSpider)
                 {
-                    // Workers don't take on spiders away from home: run, and shout for the soldiers.
+                    // Workers don't take on predators away from home: run, and shout for the soldiers.
                     a.Angle = TurnTowards(a.Angle, cr.TargetAngle + math.PI, P.TurnSpeed * 2f * Dt);
                     Deposit(a.Colony, Pheromone.Alarm, Grid.CellIndex(a.Position), 1f);
                 }
@@ -195,7 +198,9 @@ namespace AntSim
             // Sand slows walkers; princesses and winged males fly over everything.
             int hereCell = Grid.CellIndex(a.Position);
             bool flyer = !wild && (a.Caste == (byte)Caste.Princess || a.Caste == (byte)Caste.Male);
-            if (!flyer && Terrain[hereCell] == TerrainKind.Sand) speed *= P.SandSpeed;
+            if (!flyer && Terrain[hereCell] == TerrainKind.Sand && !(wild && a.Caste == (byte)WildKind.Antlion)) speed *= P.SandSpeed;
+            // Stuck in an enemy's resin trap.
+            if (cr.Slowed != 0) speed *= 0.3f;
 
             // Ease toward the wanted speed so ants don't jerk between walking, waiting and charging.
             a.Speed += (speed - a.Speed) * Accel;
@@ -322,39 +327,71 @@ namespace AntSim
             float speed = W.Speed(kind);
             int cell = Grid.CellIndex(a.Position);
 
+            // Antlions never leave their pit: they just turn to face whatever stumbles in.
+            if (kind == (int)WildKind.Antlion)
+            {
+                if (cr.Engaged != 0) a.Angle = TurnTowards(a.Angle, cr.TargetAngle, P.TurnSpeed * 2f * Dt);
+                return 0f;
+            }
+
             if (cr.Engaged != 0)
             {
-                if (kind == (int)WildKind.Mite)
+                switch (kind)
                 {
-                    // Prey: scatter away from ants.
-                    a.Angle = TurnTowards(a.Angle, cr.TargetAngle + math.PI, P.TurnSpeed * Dt);
-                    speed *= 1.3f;
-                }
-                else
-                {
-                    // Beetles defend themselves; spiders pounce.
-                    a.Angle = TurnTowards(a.Angle, cr.TargetAngle, P.TurnSpeed * 1.5f * Dt);
-                    if (cr.InRange != 0) speed *= C.EngagedSpeed;
+                    case (int)WildKind.Mite:
+                        // Prey: scatter away from ants.
+                        a.Angle = TurnTowards(a.Angle, cr.TargetAngle + math.PI, P.TurnSpeed * Dt);
+                        speed *= 1.3f;
+                        break;
+                    case (int)WildKind.Cricket:
+                        // Hops away in jumps: a burst of speed in a slightly random direction.
+                        a.Angle = TurnTowards(a.Angle, cr.TargetAngle + math.PI + rng.NextFloat(-0.6f, 0.6f), P.TurnSpeed * 2f * Dt);
+                        speed *= rng.NextFloat() < 0.3f ? 2.2f : 1f;
+                        break;
+                    case (int)WildKind.Caterpillar:
+                        // Tries to crawl off, too slowly to get away.
+                        a.Angle = TurnTowards(a.Angle, cr.TargetAngle + math.PI, P.TurnSpeed * 0.3f * Dt);
+                        speed *= 0.8f;
+                        break;
+                    case (int)WildKind.Woodlouse:
+                        // Rolls up into a ball and waits for the ants to give up.
+                        speed = 0f;
+                        break;
+                    default:
+                        // Beetles defend themselves; spiders, assassin bugs and centipedes pounce.
+                        a.Angle = TurnTowards(a.Angle, cr.TargetAngle, P.TurnSpeed * 1.5f * Dt);
+                        if (cr.InRange != 0) speed *= C.EngagedSpeed;
+                        break;
                 }
                 return speed;
             }
 
-            if (kind == (int)WildKind.Spider)
+            if (kind == (int)WildKind.Spider || kind == (int)WildKind.Centipede)
             {
-                a.Angle += rng.NextFloat(-1f, 1f) * P.Wander * Dt;
+                // Hunters roam; centipedes in long, purposeful sweeps.
+                a.Angle += rng.NextFloat(-1f, 1f) * P.Wander * (kind == (int)WildKind.Centipede ? 0.5f : 1f) * Dt;
                 return speed;
             }
+            if (kind == (int)WildKind.Assassin)
+            {
+                // Creeps about, then sits still for a while in ambush.
+                a.Angle += rng.NextFloat(-1f, 1f) * P.Wander * 0.6f * Dt;
+                return math.frac(a.Age / 40f) < 0.45f ? 0f : speed;
+            }
 
-            // Mites and beetles graze: drift toward plants and linger on them.
+            // Grazers: drift toward plants and fallen leaves and linger on them.
             float l = SenseLeaves(a.Position, a.Angle + P.SensorAngle);
             float f = SenseLeaves(a.Position, a.Angle);
             float r = SenseLeaves(a.Position, a.Angle - P.SensorAngle);
             SteerByScores(ref a, ref rng, l, f, r);
+            if (kind == (int)WildKind.Cricket) speed *= rng.NextFloat() < 0.05f ? 1.5f : 0.35f; // mostly walks, sometimes hops
             if (Leaves[cell] > 0)
             {
                 speed *= 0.35f;
-                // Beetles strip plants as they go.
-                if (kind == (int)WildKind.Beetle && rng.NextFloat() < 2f * Dt) TryTake(Leaves, cell);
+                // Beetles and caterpillars strip plants as they go; woodlice tidy up fallen leaves.
+                float chew = kind == (int)WildKind.Beetle ? 2f : kind == (int)WildKind.Caterpillar ? 1.2f
+                    : kind == (int)WildKind.Woodlouse ? 0.5f : 0f;
+                if (chew > 0f && rng.NextFloat() < chew * Dt) TryTake(Leaves, cell);
             }
             return speed;
         }
@@ -1159,6 +1196,7 @@ namespace AntSim
         [ReadOnly] public NativeArray<float> Pheromones;
         [ReadOnly] public NativeArray<int> Food;
         [ReadOnly] public NativeArray<int> Leaves;
+        [ReadOnly] public NativeArray<byte> PlantCap;
         [ReadOnly] public NativeArray<byte> Terrain;
         [ReadOnly] public NativeArray<float4> ColonyColors;
         [WriteOnly] public NativeArray<Color32> Pixels;
@@ -1199,7 +1237,15 @@ namespace AntSim
                 : new float3(0.12f, 0.09f, 0.07f) * (0.9f + 0.2f * grain);
 
             int leaf = Leaves[cell];
-            if (leaf > 0) col = math.lerp(col, new float3(0.10f, 0.38f, 0.10f), 0.45f + 0.55f * math.saturate(leaf / LeafCap));
+            if (leaf > 0)
+            {
+                // Living plants are green; fallen leaves (on bare ground, or more than the plant holds) autumn brown.
+                int cap = PlantCap[cell];
+                float green = cap > 0 ? math.saturate(cap / (float)leaf) : 0f;
+                float3 leafCol = math.lerp(new float3(0.50f, 0.28f, 0.08f) * (0.85f + 0.3f * ((h >> 8) & 255) / 255f),
+                    new float3(0.10f, 0.38f, 0.10f), green);
+                col = math.lerp(col, leafCol, 0.45f + 0.55f * math.saturate(leaf / LeafCap));
+            }
 
             if (Mode != 0)
             {
@@ -1237,13 +1283,57 @@ namespace AntSim
         [ReadOnly] public NativeArray<float4> ColonyColors;
         [ReadOnly] public NativeArray<float4> Farms;       // x, y, colony, aphid fullness 0..1
         [ReadOnly] public NativeArray<float> GardenLevels; // per colony, 0..1 of max
+        [ReadOnly] public NativeArray<float4> Trees;       // x, y, canopy radius, health 0..1 (-1 dead)
+        [ReadOnly] public NativeArray<float4> Defences;    // x, y, colony * 16 + kind, radius
         public GridInfo Grid;
         public int NestCount;
         public int FarmCount;
+        public int TreeCount;
+        public int DefenceCount;
         public int Focus;
+        public float TrunkRadius;
 
         public void Execute()
         {
+            for (int k = 0; k < TreeCount; k++) DrawTree(Trees[k]);
+
+            for (int k = 0; k < DefenceCount; k++)
+            {
+                float4 d = Defences[k];
+                int colony = (int)d.z / 16, kind = (int)d.z % 16;
+                if (kind == 2) continue; // fortified nests are drawn with the nest
+                float3 dc = ColonyColors[colony].xyz;
+                float r = d.w;
+                Bounds(d.xy, r, out int x0, out int y0, out int x1, out int y1);
+                for (int y = y0; y <= y1; y++)
+                for (int x = x0; x <= x1; x++)
+                {
+                    int cell = y * Grid.Width + x;
+                    float2 p = Grid.CellCenter(cell);
+                    float2 o = p - d.xy;
+                    float dist = math.length(o);
+                    if (dist > r) continue;
+                    if (kind == 0)
+                    {
+                        // Resin trap: glossy amber blobs, with a dashed rim in the owner's colour.
+                        if (dist > r - 0.9f) { if ((int)((math.atan2(o.y, o.x) + math.PI) * 4f) % 2 == 0) Set(cell, dc); }
+                        else
+                        {
+                            // Soft, uneven amber: thicker towards the middle, patchy at the edge.
+                            float n = (math.hash(new int2(x, y)) & 255) / 255f;
+                            float a = (0.18f + 0.3f * n) * (1f - 0.5f * dist / r);
+                            Set(cell, math.lerp(Get(cell), new float3(0.8f, 0.52f, 0.14f), a));
+                        }
+                    }
+                    else
+                    {
+                        // Stinger mound: a raised earth mound, its sting range a faint ring.
+                        if (dist < 2.6f) Set(cell, math.lerp(new float3(0.42f, 0.3f, 0.18f), dc, dist < 1.2f ? 0.7f : 0.25f) * (1.2f - 0.25f * dist));
+                        else if (dist > r - 0.8f) Set(cell, math.lerp(Get(cell), dc, 0.45f));
+                    }
+                }
+            }
+
             for (int k = 0; k < FarmCount; k++)
             {
                 float4 farm = Farms[k];
@@ -1272,6 +1362,13 @@ namespace AntSim
                 float g = GardenLevels[c];
                 float3 rim = nest.HasQueen == 0 ? new float3(0.35f, 0.35f, 0.35f) : nc; // queenless: grey rim
                 if (c == Focus) rim = math.lerp(rim, new float3(1f, 1f, 1f), 0.5f);
+                bool fortified = false;
+                for (int f = 0; f < DefenceCount; f++)
+                {
+                    float4 d = Defences[f];
+                    if ((int)d.z % 16 == 2 && (int)d.z / 16 == c && math.distancesq(d.xy, nest.Position) < 1f) fortified = true;
+                }
+                if (fortified) r += 1.2f; // thick stone walls round the nest
 
                 Bounds(nest.Position, r + 1f, out int x0, out int y0, out int x1, out int y1);
                 for (int y = y0; y <= y1; y++)
@@ -1289,6 +1386,7 @@ namespace AntSim
                         continue;
                     }
                     if (d >= r) continue;
+                    if (fortified && d > r - 2.4f) { Set(cell, (x + y) % 2 == 0 ? new float3(0.55f, 0.53f, 0.5f) : rim); continue; }
                     if (d > r - 1.2f) { Set(cell, rim); continue; }
                     // Fungus garden: pale blotches inside the nest, more with each level.
                     if (g > 0f && ((int)(p.x * 3.1f + p.y * 1.3f) % 4 == 0) && d < r * (0.4f + 0.6f * g))
@@ -1308,6 +1406,39 @@ namespace AntSim
                         if (rd > 6f && rd < 7.5f) Set(cell, nc);
                     }
                 }
+            }
+        }
+
+        /// <summary>A tree from above: dappled shade under the crown, the trunk in the middle. Dead: a grey snag.</summary>
+        void DrawTree(float4 t)
+        {
+            bool dead = t.w < 0f;
+            float r = dead ? TrunkRadius + 0.5f : t.z;
+            // Leaves yellow as the tree runs out of wood or years.
+            float3 shade = math.lerp(new float3(0.35f, 0.30f, 0.05f), new float3(0.02f, 0.16f, 0.05f), math.saturate(t.w * 2f));
+            Bounds(t.xy, r, out int x0, out int y0, out int x1, out int y1);
+            for (int y = y0; y <= y1; y++)
+            for (int x = x0; x <= x1; x++)
+            {
+                int cell = y * Grid.Width + x;
+                float2 o = Grid.CellCenter(cell) - t.xy;
+                float d = math.length(o);
+                if (d > r) continue;
+                if (d < TrunkRadius)
+                {
+                    // Bark: rings round the middle.
+                    float ring = math.frac(d * 1.3f);
+                    float3 bark = dead ? new float3(0.33f, 0.30f, 0.27f) : new float3(0.36f, 0.22f, 0.11f);
+                    Set(cell, bark * (ring < 0.25f ? 0.7f : 1f) * (d > TrunkRadius - 0.7f ? 0.75f : 1f));
+                    continue;
+                }
+                if (dead) continue;
+                // Canopy shadow, broken up by patches of light.
+                uint hh = math.hash(new int2(x / 2, y / 2));
+                float dapple = (hh & 255) / 255f;
+                float edge = math.saturate((r - d) / 2.5f);
+                float a = (dapple < 0.3f ? 0.12f : 0.38f) * edge;
+                Set(cell, math.lerp(Get(cell), shade, a));
             }
         }
 

@@ -28,7 +28,7 @@ namespace AntSim
         readonly List<AphidFarm> farms = new List<AphidFarm>();
         readonly List<float3> bushes = new List<float3>(); // x, y, radius
         NativeArray<float4> farmData;
-        NativeArray<float4> nearestWild;  // [colony * 3 + kind] = (x, y, dist, found)
+        NativeArray<float4> nearestWild;  // [colony * WildKinds.Count + kind] = (x, y, dist, found)
         NativeArray<int> beetlesAtFarm;
         float ecoTimer;
         float aiTimer;
@@ -45,15 +45,16 @@ namespace AntSim
         void AllocateEcology()
         {
             farmData = new NativeArray<float4>(MaxFarms, Allocator.Persistent);
-            nearestWild = new NativeArray<float4>(colonyCount * 3, Allocator.Persistent);
+            nearestWild = new NativeArray<float4>(colonyCount * WildKinds.Count, Allocator.Persistent);
             beetlesAtFarm = new NativeArray<int>(MaxFarms, Allocator.Persistent);
         }
 
         void SetupEcology()
         {
             GeneratePlants();
+            GenerateTrees();
             PlaceStarterFood();
-            for (int k = 0; k < 3; k++)
+            for (int k = 0; k < WildKinds.Count; k++)
             {
                 int target = WildTarget((WildKind)k);
                 for (int i = 0; i < target; i++) SpawnWildAtRandom((WildKind)k);
@@ -151,7 +152,7 @@ namespace AntSim
                 new RegrowJob
                 {
                     Leaves = leaves, PlantCap = plantCap,
-                    Chance = farming.LeafRegrow * step, Seed = rng.NextUInt(1, uint.MaxValue),
+                    Chance = farming.LeafRegrow * step, Rot = 0.0025f * step, Seed = rng.NextUInt(1, uint.MaxValue),
                 }.Schedule(grid.CellCount, 8192).Complete();
                 int fc = FillFarmData();
                 new WildScanJob
@@ -161,6 +162,8 @@ namespace AntSim
                     WildColony = WildColony, FarmRadius = 6f,
                 }.Run();
                 UpdateFarms(step);
+                UpdateTrees(step);
+                UpdateDefences(step);
                 UpdateRaids(step);
                 UpdateSwarms(step);
                 UpdateGuardSites(step);
@@ -173,7 +176,7 @@ namespace AntSim
             if (wildTimer >= 3f)
             {
                 wildTimer = 0f;
-                for (int k = 0; k < 3; k++)
+                for (int k = 0; k < WildKinds.Count; k++)
                 {
                     int missing = WildTarget((WildKind)k) - WildCount((WildKind)k);
                     for (int i = 0; i < math.min(missing, 3); i++) SpawnWildAtRandom((WildKind)k);
@@ -215,44 +218,69 @@ namespace AntSim
         int WildTarget(WildKind k)
         {
             float mul = setup.Wildlife == 0 ? 0f : setup.Wildlife == 1 ? 1f : 2.5f;
-            return (int)(wildlife.Density((int)k) * grid.WorldSize.x * grid.WorldSize.y / 10000f * mul);
+            float area = grid.WorldSize.x * grid.WorldSize.y;
+            if (k == WildKind.Antlion) area *= TerrainCover.z; // antlions only live in sand
+            return (int)(wildlife.Density((int)k) * area / 10000f * mul);
         }
 
         void SpawnWildAtRandom(WildKind k)
         {
-            for (int attempt = 0; attempt < 12; attempt++)
+            for (int attempt = 0; attempt < 16; attempt++)
             {
                 float2 p;
-                if (k != WildKind.Spider && bushes.Count > 0)
+                bool underTree = (k == WildKind.Woodlouse && rng.NextFloat() < 0.8f) || (WildKinds.IsGrazer((int)k) && rng.NextFloat() < 0.3f);
+                if (underTree && TryRandomTreeSpot(out p)) { }
+                else if (WildKinds.IsGrazer((int)k) && bushes.Count > 0)
                 {
-                    // Grazers turn up in the vegetation.
+                    // Grazers turn up in the vegetation; woodlice in the leaf litter under trees.
                     float3 b = bushes[rng.NextInt(0, bushes.Count)];
                     p = b.xy + rng.NextFloat2Direction() * rng.NextFloat(0f, b.z);
                 }
                 else p = rng.NextFloat2(new float2(4f), grid.WorldSize - 4f);
-                if (NearNest(p, k == WildKind.Mite ? 25f : 70f) || IsBlocked(p)) continue;
+                if (k == WildKind.Antlion && TerrainAt(p) != TerrainKind.Sand) continue; // pits are dug in sand
+                float clear = k == WildKind.Mite || k == WildKind.Cricket ? 25f : k == WildKind.Centipede ? 120f : 70f;
+                if (NearNest(p, clear) || IsBlocked(p)) continue;
                 SpawnWildlife(k, 1, p, 0f);
                 return;
             }
         }
 
-        /// <summary>Nearest beetle/spider to a colony's nest, from the last scan.</summary>
+        /// <summary>Nearest bug of a kind to a colony's nests, from the last scan.</summary>
         public bool TryGetNearestWild(int colony, WildKind k, out Vector2 pos, out float dist)
         {
-            float4 v = nearestWild[colony * 3 + (int)k];
+            float4 v = nearestWild[colony * WildKinds.Count + (int)k];
             pos = v.xy;
             dist = v.z;
             return v.w > 0f;
         }
 
-        /// <summary>Send soldiers after the nearest beetle or spider. Returns an error message, or null on success.</summary>
+        /// <summary>The nearest bug of any of these kinds (false if there's none).</summary>
+        public bool TryGetNearestOf(int colony, WildKind[] kinds, out WildKind kind, out float dist)
+        {
+            kind = kinds[0];
+            dist = float.MaxValue;
+            bool found = false;
+            foreach (var k in kinds)
+                if (TryGetNearestWild(colony, k, out _, out float d) && d < dist) { dist = d; kind = k; found = true; }
+            return found;
+        }
+
+        /// <summary>Send soldiers after the nearest bug of a kind. Returns an error message, or null on success.</summary>
         public string HuntNearest(int colony, WildKind k)
         {
-            if (!TryGetNearestWild(colony, k, out var p, out _)) return $"No {k.ToString().ToLower()}s around right now.";
+            if (!TryGetNearestWild(colony, k, out var p, out _)) return $"No {WildKinds.Plural(k)} around right now.";
             if (Colonies[colony].Soldiers < 5) return "You need some soldiers to hunt (raise the soldier ratio).";
             OrderRaid(colony, p);
             Colonies[colony].AiRaidKind = 1 + (int)k;
             return null;
+        }
+
+        /// <summary>Hunts the nearest of several kinds (e.g. any big prey). Returns an error message, or null.</summary>
+        public string HuntNearestOf(int colony, WildKind[] kinds, string none, out WildKind hunted)
+        {
+            hunted = kinds[0];
+            if (!TryGetNearestOf(colony, kinds, out hunted, out _)) return none;
+            return HuntNearest(colony, hunted);
         }
 
         /// <summary>Hunts follow the prey around and end when it's dead; war raids time out.</summary>
@@ -282,6 +310,7 @@ namespace AntSim
         public string UpgradeGarden(int colony)
         {
             var col = Colonies[colony];
+            if (SpeciesOf(colony).NoFarming) return $"{SpeciesOf(colony).Name} don't grow fungus.";
             if (col.GardenLevel >= FarmingParams.MaxGarden) return "The fungus garden is already at its biggest.";
             float cost = FarmingParams.GardenCost(col.GardenLevel + 1);
             if (col.Food < cost) return $"Not enough food: the garden needs {cost:0}.";
@@ -296,6 +325,7 @@ namespace AntSim
         public string PlaceAphidFarm(int colony, float2 pos)
         {
             var col = Colonies[colony];
+            if (SpeciesOf(colony).NoFarming) return $"{SpeciesOf(colony).Name} don't keep aphids.";
             if (farms.Count >= MaxFarms) return "The map can't hold more farms.";
             float cost = FarmCost(colony);
             if (col.Food < cost) return $"Not enough food: an aphid farm costs {cost:0}.";
@@ -425,13 +455,16 @@ namespace AntSim
 
             // Fungus garden grows with the colony.
             int wantGarden = math.min(FarmingParams.MaxGarden, 1 + pop / 500);
-            if (sp.GardenYield >= 1f && col.GardenLevel < wantGarden &&
+            if (!sp.NoFarming && sp.GardenYield >= 1f && col.GardenLevel < wantGarden &&
                 col.Food > FarmingParams.GardenCost(col.GardenLevel + 1) + reserve)
                 UpgradeGarden(c);
 
+            // Defences around home once there's food to spare (and sooner when attacked).
+            RivalDefences(c, col, reserve);
+
             // Aphid farms on bushes near home.
             int wantFarms = 1 + pop / 350;
-            if (col.AphidFarms < wantFarms && col.Food > FarmCost(c) * 1.5f + reserve)
+            if (!sp.NoFarming && col.AphidFarms < wantFarms && col.Food > FarmCost(c) * 1.5f + reserve)
             {
                 float best = float.MaxValue;
                 float2 spot = default;
@@ -452,16 +485,17 @@ namespace AntSim
 
             if (col.RaidActive || col.StatRaidTarget >= 0) return;
 
-            // Hunt: a beetle close to home is a feast (only awake colonies hunt; bugs don't exist for sleepers).
-            if (!col.Abstract && col.Soldiers >= 25 && TryGetNearestWild(c, WildKind.Beetle, out _, out float bd) && bd < 140f)
+            // Hunt: big prey close to home is a feast (only awake colonies hunt; bugs don't exist for sleepers).
+            if (!col.Abstract && col.Soldiers >= 25 && TryGetNearestOf(c, WildKinds.BigPrey, out var prey, out float bd) && bd < 140f)
             {
-                HuntNearest(c, WildKind.Beetle);
+                HuntNearest(c, prey);
                 return;
             }
-            // Spiders near the nest get mobbed.
-            if (!col.Abstract && col.Soldiers >= 30 && TryGetNearestWild(c, WildKind.Spider, out _, out float sd) && sd < 70f)
+            // Predators near the nest get mobbed (a centipede only by a big army).
+            if (!col.Abstract && TryGetNearestOf(c, WildKinds.Predators, out var pred, out float sd) && sd < 70f
+                && col.Soldiers >= (pred == WildKind.Centipede ? 80 : 30))
             {
-                HuntNearest(c, WildKind.Spider);
+                HuntNearest(c, pred);
                 return;
             }
 

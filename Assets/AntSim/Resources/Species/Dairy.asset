@@ -17,6 +17,7 @@ MonoBehaviour:
   Description: Aphid herders. Aphid farms cost half and give double honeydew. Slightly
     fragile. Nurses at home make brood cheaper.
   Shape: 3
+  Difficulty: 0
   Speed: 1
   Health: 0.9
   Damage: 1

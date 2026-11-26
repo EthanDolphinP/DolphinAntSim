@@ -1,26 +1,97 @@
+using System.Threading;
 using Unity.Burst;
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs;
 using Unity.Mathematics;
 using Random = Unity.Mathematics.Random;
 
 namespace AntSim
 {
-    /// <summary>Plants slowly regrow their leaves up to each cell's capacity.</summary>
+    /// <summary>
+    /// Plants slowly regrow their leaves up to each cell's capacity. Fallen leaves (more than the plant there
+    /// holds, e.g. under a tree) slowly rot away.
+    /// </summary>
     [BurstCompile]
     public struct RegrowJob : IJobParallelFor
     {
         public NativeArray<int> Leaves;
         [ReadOnly] public NativeArray<byte> PlantCap; // 0 = bare ground
         public float Chance;  // per cell per call
+        public float Rot;     // chance per fallen leaf per call to rot away
         public uint Seed;
 
         public void Execute(int i)
         {
             int cap = PlantCap[i];
-            if (cap == 0 || Leaves[i] >= cap) return;
+            int have = Leaves[i];
+            if (have > cap)
+            {
+                var r = new Random(Seed ^ (uint)(i * 747796405 + 1));
+                if (r.NextFloat() < (have - cap) * Rot) Leaves[i] = have - 1;
+                return;
+            }
+            if (cap == 0 || have >= cap) return;
             var rng = new Random(Seed ^ (uint)(i * 747796405 + 1));
-            if (rng.NextFloat() < Chance) Leaves[i] = Leaves[i] + 1;
+            if (rng.NextFloat() < Chance) Leaves[i] = have + 1;
+        }
+    }
+
+    /// <summary>
+    /// Defensive buildings, one per index. Pass 0: fortified nests halve the damage their own ants took this tick.
+    /// Pass 1: resin traps slow, and stinger mounds sting, every hostile ant and bug in range. Ants are found through
+    /// the combat spatial hash (bucket = colony * BucketsPerColony + cell).
+    /// </summary>
+    [BurstCompile]
+    public unsafe struct DefenceJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<Ant> Ants;
+        [ReadOnly] public NativeArray<int> Sorted;
+        [ReadOnly] public NativeArray<int> BucketStart;
+        [ReadOnly] public NativeArray<float4> Defences; // x, y, colony * 16 + kind, radius
+        [ReadOnly] public NativeArray<byte> Hostile;
+        [NativeDisableParallelForRestriction] public NativeArray<CombatResult> Results;
+        [NativeDisableUnsafePtrRestriction] public int* Damage;
+        public HashInfo Hash;
+        public int MaxColonies, Slots, WildColony;
+        public int Sting; // damage x100 per tick
+        public int Pass;
+
+        public void Execute(int d)
+        {
+            float4 def = Defences[d];
+            int owner = (int)def.z / 16, kind = (int)def.z % 16;
+            bool fortify = kind == 2;
+            if (fortify != (Pass == 0)) return;
+            float r = def.w;
+            int2 lo = Hash.Cell(def.xy - r), hi = Hash.Cell(def.xy + r);
+            for (int col = 0; col < Slots; col++)
+            {
+                if (fortify ? col != owner : col == owner || Hostile[owner * MaxColonies + col] == 0) continue;
+                int colonyBase = col * Hash.BucketsPerColony;
+                for (int by = lo.y; by <= hi.y; by++)
+                for (int bx = lo.x; bx <= hi.x; bx++)
+                {
+                    int b = colonyBase + by * Hash.BucketsX + bx;
+                    int end = BucketStart[b + 1];
+                    for (int k = BucketStart[b]; k < end; k++)
+                    {
+                        int j = Sorted[k];
+                        Ant a = Ants[j];
+                        if (a.Dead != 0 || math.distancesq(a.Position, def.xy) > r * r) continue;
+                        // Princesses and winged males fly over traps.
+                        if (a.Colony != WildColony && a.Caste >= (byte)Caste.Princess) continue;
+                        if (fortify) Damage[j] /= 2; // only this nest's own ants: no other job touches them now
+                        else if (kind == 0)
+                        {
+                            var cr = Results[j];
+                            cr.Slowed = 1;
+                            Results[j] = cr;
+                        }
+                        else Interlocked.Add(ref Damage[j], Sting);
+                    }
+                }
+            }
         }
     }
 
@@ -98,7 +169,7 @@ namespace AntSim
         [ReadOnly] public NativeArray<Ant> Ants;
         [ReadOnly] public NativeArray<NestData> Nests;
         [ReadOnly] public NativeArray<float4> Farms; // x, y, colony, fullness
-        public NativeArray<float4> Nearest;  // [colony * 3 + kind] = (x, y, dist to the nearest of its nests, found)
+        public NativeArray<float4> Nearest;  // [colony * WildKinds.Count + kind] = (x, y, dist to the nearest of its nests, found)
         public NativeArray<int> BeetlesAtFarm; // per farm
         public int FarmCount;
         public int NestCount;
@@ -121,7 +192,7 @@ namespace AntSim
                     NestData nest = Nests[n];
                     if (nest.Active == 0 || nest.Founding != 0) continue;
                     float d = math.distance(a.Position, nest.Position);
-                    int idx = nest.Colony * 3 + kind;
+                    int idx = nest.Colony * WildKinds.Count + kind;
                     if (d < Nearest[idx].z) Nearest[idx] = new float4(a.Position, d, 1f);
                 }
                 if (kind == (int)WildKind.Beetle)

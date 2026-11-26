@@ -15,7 +15,7 @@ namespace AntSim
     {
         public AntWorld world;
 
-        enum Tab { Colonies, Orders, Nests, Farming, Diplomacy, Game, Help }
+        enum Tab { Colonies, Orders, Nests, Farming, Diplomacy, Game, Help, Defence }
 
         const float BarHeight = 50f;
         const float PanelWidth = 460f;
@@ -116,7 +116,11 @@ namespace AntSim
                 var es = UnityEngine.EventSystems.EventSystem.current;
                 if (IsTyping && es != null) es.SetSelectedGameObject(null);
                 else if (menuOpen) { if (menuPage != MenuPage.Main) menuPage = MenuPage.Main; else SetMenu(false); }
-                else if (world.PlacingFarm || world.PlacingNest) world.PlacingFarm = world.PlacingNest = false;
+                else if (world.PlacingFarm || world.PlacingNest || world.PlacingDefence >= 0)
+                {
+                    world.PlacingFarm = world.PlacingNest = false;
+                    world.PlacingDefence = -1;
+                }
                 else SetMenu(true);
             }
             if (!IsTyping && !menuOpen && Input.GetKeyDown(KeyCode.H)) panelVisible = !panelVisible;
@@ -288,7 +292,7 @@ namespace AntSim
                 { raided = true; raider = other.Name; raidedAt = world.GetNest(near).Position; }
             }
             bool toast = !string.IsNullOrEmpty(world.Toast) && Time.unscaledTime - world.ToastTime < 5f;
-            bool placing = world.PlacingFarm || world.PlacingNest;
+            bool placing = world.PlacingFarm || world.PlacingNest || world.PlacingDefence >= 0;
 
             alert.Visible = dying || raided || toast || placing;
             if (!alert.Visible) return;
@@ -297,7 +301,18 @@ namespace AntSim
             alert.Rect.anchoredPosition = new Vector2(0f, -(BarHeight + 4f));
 
             ui.Begin(alert);
-            if (world.PlacingNest)
+            if (world.PlacingDefence >= 0)
+            {
+                int kind = world.PlacingDefence;
+                ui.Label(kind == (int)DefenceKind.Fortified
+                    ? $"Click one of your nests to fortify it ({world.DefenceCost(kind):0} food). Esc to cancel."
+                    : $"Click near your nests to build a {AntWorld.DefenceNames[kind].ToLower()} ({world.DefenceCost(kind):0} food). " +
+                      "Shift-click to build several. Esc to cancel.", labelSmall);
+            }
+            else if (world.PlacingNest && world.SpeciesOf(c).TreeNester)
+                ui.Label($"Click a healthy tree for the new nest ({world.swarm.MinSpacing:0}-{world.swarm.MaxDistance:0} from your nests, " +
+                         $"away from rivals). Costs {world.swarm.Cost:0} food. Esc to cancel.", labelSmall);
+            else if (world.PlacingNest)
                 ui.Label($"Click where the new nest should go ({world.swarm.MinSpacing:0}-{world.swarm.MaxDistance:0} from your nests, " +
                          $"away from rivals, not on rock or water). Costs {world.swarm.Cost:0} food. Esc to cancel.", labelSmall);
             else if (placing)
@@ -331,6 +346,7 @@ namespace AntSim
             TabButton(Tab.Farming, "Farming");
             ui.EndRow();
             ui.BeginRow();
+            TabButton(Tab.Defence, "Defence");
             TabButton(Tab.Diplomacy, "Diplomacy");
             TabButton(Tab.Game, "Game");
             TabButton(Tab.Help, "Help");
@@ -346,6 +362,7 @@ namespace AntSim
                 case Tab.Orders: DrawOrders(); break;
                 case Tab.Nests: DrawNests(); break;
                 case Tab.Farming: DrawFarming(); break;
+                case Tab.Defence: DrawDefence(); break;
                 case Tab.Diplomacy: DrawDiplomacy(); break;
                 case Tab.Game: DrawGame(); break;
                 case Tab.Help: DrawHelp(); break;
@@ -409,8 +426,19 @@ namespace AntSim
                 }
             }
             ui.Label("Brood = eggs / larvae / pupae.  Lost = ants killed in battle.", labelSmall);
-            ui.Label($"Wildlife: {world.WildCount(WildKind.Mite)} mites, {world.WildCount(WildKind.Beetle)} beetles, " +
-                     $"{world.WildCount(WildKind.Spider)} spiders.  Food on the ground: {world.MapFood:N0}", labelSmall);
+            var bugs = new System.Text.StringBuilder("Prey: ");
+            for (int k = 0; k < WildKinds.Count; k++)
+            {
+                if (WildKinds.IsPredator(k)) continue;
+                bugs.Append($"{world.WildCount((WildKind)k)} {WildKinds.Plural((WildKind)k)}, ");
+            }
+            bugs.Length -= 2;
+            bugs.Append(".  Predators: ");
+            foreach (var k in WildKinds.Predators) bugs.Append($"{world.WildCount(k)} {WildKinds.Plural(k)}, ");
+            bugs.Length -= 2;
+            int living = 0, dead = 0;
+            foreach (var t in world.Trees) if (t.Dead) dead++; else living++;
+            ui.Label($"{bugs}.\nTrees: {living} living, {dead} dead.  Food on the ground: {world.MapFood:N0}", labelSmall);
             var cover = world.TerrainCover;
             ui.Label($"Map: {AntWorld.MapStyleNames[Mathf.Clamp(world.setup.MapStyle, 0, 3)]}, {cover.x:P0} rock, " +
                      $"{cover.y:P0} water, {cover.z:P0} sand.", labelSmall);
@@ -454,8 +482,7 @@ namespace AntSim
             ui.Label("Hunt & raid", header);
             if (f.RaidActive)
             {
-                string what = f.AiRaidKind == 1 + (int)WildKind.Beetle ? "Hunting a beetle"
-                    : f.AiRaidKind == 1 + (int)WildKind.Spider ? "Hunting a spider" : "Raiding";
+                string what = f.AiRaidKind >= 1 ? $"Hunting a {WildKinds.Name((WildKind)(f.AiRaidKind - 1))}" : "Raiding";
                 ui.Label($"<color=orange>{what} at ({f.RaidTarget.x:0}, {f.RaidTarget.y:0})</color>", label);
                 ui.BeginRow();
                 if (ui.Button("Go there", button)) world.LookAt(f.RaidTarget);
@@ -465,12 +492,20 @@ namespace AntSim
             else
             {
                 ui.BeginRow();
-                if (ui.Button("Hunt beetle", button))
-                    world.Notify(world.HuntNearest(c, WildKind.Beetle) ?? "Soldiers sent to hunt the nearest beetle.");
-                if (ui.Button("Hunt spider", button))
-                    world.Notify(world.HuntNearest(c, WildKind.Spider) ?? "Soldiers sent after the nearest spider.");
+                if (ui.Button("Hunt prey  [B]", button))
+                {
+                    string err = world.HuntNearestOf(c, WildKinds.BigPrey, "No big prey around right now.", out var prey);
+                    world.Notify(err ?? $"Soldiers sent to hunt the nearest {WildKinds.Name(prey)}.");
+                }
+                if (ui.Button("Hunt predator", button))
+                {
+                    string err = world.HuntNearestOf(c, WildKinds.Predators, "No predators around right now.", out var pred);
+                    world.Notify(err ?? $"Soldiers sent after the nearest {WildKinds.Name(pred)}.");
+                }
                 ui.EndRow();
-                ui.Label("Dead bugs and enemies drop food. Beetles are a feast but tough. " +
+                ui.Label("Dead bugs and enemies drop food. Prey: caterpillars are easy, crickets hop away, woodlice roll " +
+                         "up in their armour, beetles are a tough feast. Predators: antlions wait in sand pits, assassin " +
+                         "bugs ambush, spiders hunt, and a centipede needs an army. " +
                          "Hover the map and press <b>R</b> to raid that spot (e.g. a rival nest).", labelSmall);
             }
 
@@ -535,11 +570,25 @@ namespace AntSim
                     : "<color=#e07a6a>no queen</color>";
                 string main = k == f.PrimaryNest ? " (main)" : "";
                 string ants = f.Abstract ? $"~{n.SleepShare:P0} of ants" : $"{n.Ants:N0} ants";
+                string tree = "";
+                if (world.SpeciesOf(c).TreeNester && !n.Founding)
+                {
+                    float wood = world.NestTreeHealth(k);
+                    tree = world.TreeAt(n.Position, 4f) == null ? "   <color=#e07a6a>tree fallen!</color>"
+                        : wood <= 0f ? "   <color=#e07a6a>tree dead</color>"
+                        : wood < 0.35f ? $"   <color=#f0a05a>tree {wood:P0}</color>" : $"   tree {wood:P0}";
+                }
+                string walls = world.IsFortified(k) ? "   fortified" : "";
                 ui.BeginRow();
-                ui.Label($"<b>Nest {n.Number}</b>{main}   {ants}   {state}", label);
+                ui.Label($"<b>Nest {n.Number}</b>{main}   {ants}   {state}{tree}{walls}", label);
                 if (ui.Button("Go", button, 44)) world.LookAt(n.Position);
                 ui.EndRow();
             }
+            if (world.SpeciesOf(c).TreeNester)
+                ui.Label("Termites live inside trees and eat them: a nest finishes its tree in 35 to 100 minutes, faster " +
+                         "the bigger the nest. A dead tree stands for 10 more minutes, then falls, and a queen left " +
+                         "outside dies within minutes. Found the next nest in a healthy tree in good time. " +
+                         $"Wood feeds the colony <b>{f.WoodIncome:0.0} food/s</b>.", labelSmall);
             ui.Label("Food and brood are shared by all nests. Every nest with a queen lays eggs; " +
                      "new ants hatch in nests that have a queen.", labelSmall);
 
@@ -570,6 +619,7 @@ namespace AntSim
                 {
                     world.PlacingNest = !world.PlacingNest;
                     world.PlacingFarm = false;
+                    world.PlacingDefence = -1;
                 }
                 if (ui.Button("Let scouts choose", button))
                 {
@@ -598,6 +648,18 @@ namespace AntSim
             var f = Me;
             var sp = world.SpeciesOf(c);
 
+            if (sp.NoFarming)
+            {
+                ui.Label("Food", header);
+                ui.Label($"{sp.Name} don't keep aphids or grow fungus." +
+                         (sp.LeafEater ? " Workers gather leaves (green bushes and fallen leaves under trees) and the colony eats them straight away." : ""),
+                         labelSmall);
+                if (sp.LeafEater)
+                    ui.Label($"Leaves: <b>{f.LeafIncome:0.0} food/s</b>   ({world.farming.FoodPerLeaf * sp.GardenYield:0.0} food each)", label);
+                if (sp.TreeNester) ui.Label($"Wood from your trees: <b>{f.WoodIncome:0.0} food/s</b>", label);
+                return;
+            }
+
             ui.Label("Fungus garden", header);
             ui.Label("Workers bring leaves from bushes; gardeners grow fungus on them, which feeds the colony.", labelSmall);
             if (f.GardenLevel == 0) ui.Label("You have no garden yet. Workers ignore leaves until you build one.", label);
@@ -623,7 +685,11 @@ namespace AntSim
                      "the farm for your foragers. Beetles eat aphids; enemies steal honeydew. Defend them.", labelSmall);
             ui.Label($"Farms: {f.AphidFarms}   Honeydew <b>{f.FarmIncome:0.0}/s</b>", label);
             if (ui.Button(world.PlacingFarm ? "Cancel placing" : $"Place aphid farm ({world.FarmCost(c):0} food)  [F]", world.PlacingFarm ? tabOn : button))
+            {
                 world.PlacingFarm = !world.PlacingFarm;
+                world.PlacingNest = false;
+                world.PlacingDefence = -1;
+            }
             foreach (var farm in world.Farms)
             {
                 if (farm.Colony != c) continue;
@@ -632,6 +698,37 @@ namespace AntSim
                 ui.Label($"({farm.Position.x:0}, {farm.Position.y:0})  {farm.Aphids:0} aphids{danger}", labelSmall);
                 if (ui.Button("Go", button, 44)) world.LookAt(farm.Position);
                 ui.EndRow();
+            }
+        }
+
+        void DrawDefence()
+        {
+            int c = world.CommandColony;
+            var f = Me;
+            ui.Label("Defences", header);
+            ui.Label("Buildings that protect your nests and farms. Build them close to home (within " +
+                     $"{world.farming.FarmMaxDistance:0} of a nest). They hurt or slow enemy ants and wild bugs alike.", labelSmall);
+            for (int kind = 0; kind < AntWorld.DefenceNames.Length; kind++)
+            {
+                ui.Space(6);
+                int have = world.DefenceCount(c, kind), max = world.DefenceLimitOf(kind);
+                string count = kind == (int)DefenceKind.Fortified ? $"{have} of your nests" : $"{have} / {max}";
+                ui.Label($"<b>{AntWorld.DefenceNames[kind]}</b>   <color=#7d8a84>{count}</color>", label);
+                ui.Label(AntWorld.DefenceInfo[kind], labelSmall);
+                bool on = world.PlacingDefence == kind;
+                string verb = kind == (int)DefenceKind.Fortified ? "Fortify a nest" : "Build";
+                if (ui.Button(on ? "Cancel" : $"{verb} ({world.DefenceCost(kind):0} food)", on ? tabOn : button))
+                {
+                    world.PlacingDefence = on ? -1 : kind;
+                    world.PlacingFarm = world.PlacingNest = false;
+                }
+            }
+            if (f.Captured > 0 || world.SpeciesOf(c).Captives > 0f)
+            {
+                ui.Space(8);
+                ui.Label("Captives", header);
+                ui.Label($"Workers captured from enemy colonies so far: <b>{f.Captured:N0}</b>. Each enemy ant your colony " +
+                         "kills brings back a pupa that hatches as one of your workers.", labelSmall);
             }
         }
 
@@ -771,7 +868,7 @@ namespace AntSim
                     : "Keep your queen alive and outlast every rival colony.\n\n") +
                 "<b>Food</b>\n" +
                 "Starting food runs out. Get more by:\n" +
-                " - hunting: dead mites, beetles, spiders and enemy ants become food\n" +
+                " - hunting: dead bugs and enemy ants become food\n" +
                 " - aphid farms on bushes (Farming tab, F)\n" +
                 " - a fungus garden fed with leaves (Farming tab, G)\n\n" +
                 "<b>Camera</b>\n" +
@@ -779,21 +876,27 @@ namespace AntSim
                 "<b>Keys</b>\n" +
                 "Space: pause      - / = : slower / faster\n" +
                 "R: raid the spot under the mouse      X: call off\n" +
-                "B: hunt the nearest beetle      F: place aphid farm      G: upgrade garden\n" +
+                "B: hunt the nearest big prey      F: place aphid farm      G: upgrade garden\n" +
                 "N: pick a site for a new nest (Nests tab)\n" +
                 "F5: quicksave      F9: load the quicksave (Game tab for more)\n" +
                 "Tab: select next colony      P: pheromone view      H: hide panel\n" +
                 "Esc: menu (settings, save, quit to menu or desktop)\n" +
                 (world.Sandbox ? "Left click: drop food.  T / Y: +25k workers / +5k soldiers\n" : "") + "\n" +
                 "<b>Reading the map</b>\n" +
-                "Green: bushes.  Gold: food and honeydew.  Coloured haze: trails.  Red haze: fighting.\n" +
+                "Green: bushes.  Brown: fallen leaves.  Gold: food and honeydew.  Coloured haze: trails.  Red haze: fighting.\n" +
+                "Trees: a trunk in dappled shade. They drop leaves now and then, and all of them when they die. A dead tree " +
+                "is a grey snag that falls after a while; saplings grow to replace it.\n" +
                 "Grey: rock.  Blue: water.  Tan: sand (slow going). Princesses and males fly over rock and water.\n" +
                 "Ringed patches: aphid farms.  Pale spots in a nest: fungus garden.\n" +
                 "Pale yellow, slim ants: scouts.  Pale blue soldiers: drones (escorts).\n" +
                 "Bigger or smaller ants of your colour: castes (majors, minims...). See the Orders tab.\n" +
                 "Big white-rimmed ant: queen.  Grey nest rim: no queen.\n" +
                 "Gold winged ant: princess.  Small dark winged ants: males (swarm).  Dashed ring: a nest being founded.\n" +
-                "Red dots: mites.  Green shells: beetles.  Black with legs: spiders.\n\n" +
+                "Amber blobs: resin traps.  Earth mound with a ring: stinger mound.  Stone rim: fortified nest.\n" +
+                "Prey: red dots are mites, green shells beetles, green stripy worms caterpillars, brown hoppers crickets, " +
+                "grey banded ovals woodlice.\n" +
+                "Predators: black with legs: spiders.  Sand pits: antlions.  Dark with orange edges: assassin bugs.  " +
+                "Long and many-legged: centipedes (run!).\n\n" +
                 "Too small or too big? Use A- / A+ in the top bar.", label);
         }
 

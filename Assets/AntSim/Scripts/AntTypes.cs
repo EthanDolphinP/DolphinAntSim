@@ -25,9 +25,51 @@ namespace AntSim
     /// </summary>
     public enum WildKind : byte
     {
-        Mite = 0,   // small, harmless prey that flees
-        Beetle = 1, // big, armoured, slow; eats plants and aphids; a feast if you can kill it
-        Spider = 2, // predator that hunts ants
+        Mite = 0,        // small, harmless prey that flees
+        Beetle = 1,      // big, armoured, slow; eats plants and aphids; a feast if you can kill it
+        Spider = 2,      // predator that hunts ants
+        Caterpillar = 3, // slow, soft, harmless leaf-eater: easy big prey
+        Cricket = 4,     // quick prey that hops away from ants
+        Woodlouse = 5,   // armoured scavenger of fallen leaves; rolls up when attacked
+        Antlion = 6,     // easy predator: sits in a pit in the sand and grabs whatever walks in
+        Assassin = 7,    // assassin bug: a slow stalker that picks off stragglers
+        Centipede = 8,   // the hardest predator: fast, armoured, deadly
+    }
+
+    public static class WildKinds
+    {
+        public const int Count = 9;
+
+        public static bool IsPredator(int k) =>
+            k == (int)WildKind.Spider || k == (int)WildKind.Antlion || k == (int)WildKind.Assassin || k == (int)WildKind.Centipede;
+
+        /// <summary>Little prey that doesn't count as a threat (LOD) and has short reach.</summary>
+        public static bool IsSmall(int k) => k == (int)WildKind.Mite || k == (int)WildKind.Cricket;
+
+        /// <summary>Eats plants and fallen leaves (and turns up near them).</summary>
+        public static bool IsGrazer(int k) => !IsPredator(k);
+
+        public static string Name(WildKind k)
+        {
+            switch (k)
+            {
+                case WildKind.Mite: return "mite";
+                case WildKind.Beetle: return "beetle";
+                case WildKind.Spider: return "spider";
+                case WildKind.Caterpillar: return "caterpillar";
+                case WildKind.Cricket: return "cricket";
+                case WildKind.Woodlouse: return "woodlouse";
+                case WildKind.Antlion: return "antlion";
+                case WildKind.Assassin: return "assassin bug";
+                default: return "centipede";
+            }
+        }
+
+        public static string Plural(WildKind k) => k == WildKind.Woodlouse ? "woodlice" : Name(k) + "s";
+
+        /// <summary>Prey worth sending soldiers after, and the predators, for the hunt buttons and the AI.</summary>
+        public static readonly WildKind[] BigPrey = { WildKind.Beetle, WildKind.Caterpillar, WildKind.Woodlouse, WildKind.Cricket };
+        public static readonly WildKind[] Predators = { WildKind.Spider, WildKind.Assassin, WildKind.Antlion, WildKind.Centipede };
     }
 
     /// <summary>What an ant carries in its mandibles.</summary>
@@ -137,6 +179,7 @@ namespace AntSim
         public byte InRange;      // close enough to bite
         public byte Attacked;     // bit this tick, so reset cooldown
         public byte TargetKind;   // 0 = ant, 1 + WildKind for wildlife
+        public byte Slowed;       // stuck in an enemy's resin trap (DefenceJob)
     }
 
     /// <summary>Combat tuning. Passed by value into Burst jobs.</summary>
@@ -529,6 +572,12 @@ namespace AntSim
         public int AphidFarms;
         public float FarmIncome;   // food/s from fungus + honeydew stored directly (for the HUD)
         public float GardenIncome;
+        [NonSerialized] public float LeafIncome;  // leaf eaters (termites): food/s from leaves eaten directly
+        [NonSerialized] public float WoodIncome;  // tree nesters (termites): food/s from their trees' wood
+        [NonSerialized] public int ExposedNests;  // tree nesters: nests whose tree has fallen
+        [Tooltip("Slave-makers: captured workers not yet hatched (fractions carry over).")]
+        public float CaptiveCarry;
+        public long Captured;
         [NonSerialized] public float AiTimer;
         [NonSerialized] public float RaidTimer;
         [NonSerialized] public int AiRaidKind; // 0 = war raid / player order, 1 + WildKind = hunt

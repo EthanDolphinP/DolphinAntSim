@@ -59,7 +59,7 @@ namespace AntSim
                 if (a.Dead != 0) continue;
                 bool wild = a.Colony >= ColonyCount;
                 if (!wild && a.Caste >= (byte)Caste.Queen) continue; // queens, princesses and winged males
-                if (wild && a.Caste == (byte)WildKind.Mite) continue;
+                if (wild && WildKinds.IsSmall(a.Caste)) continue;
 
                 if (!wild)
                 {

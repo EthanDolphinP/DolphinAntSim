@@ -233,7 +233,7 @@ namespace AntSim
             for (int i = 0; i < all.Length; i++)
             {
                 var sp = all[i];
-                if (ui.Button($"<b>{sp.Name}</b>\n{sp.Description}\n<color=#7d8a84>{StatLine(sp)}</color>{CasteLine(sp)}",
+                if (ui.Button($"<b>{sp.Name}</b>   {DifficultyTag(sp)}\n{sp.Description}\n<color=#7d8a84>{StatLine(sp)}</color>{CasteLine(sp)}",
                         setup.Species == i ? cardOn : card))
                     setup.Species = i;
             }
@@ -288,6 +288,13 @@ namespace AntSim
             ui.Space(12);
             if (ui.Button("Start", buttonOn)) { ui.EndBox(); StartGame(); return; }
             ui.EndBox();
+        }
+
+        static string DifficultyTag(SpeciesDef sp)
+        {
+            string hex = sp.Difficulty <= 0 ? UiTheme.GoodHex : sp.Difficulty == 1 ? UiTheme.DimHex
+                : sp.Difficulty == 2 ? UiTheme.WarnHex : UiTheme.BadHex;
+            return $"<size=12><color={hex}>{sp.DifficultyName}</color></size>";
         }
 
         static string StatLine(SpeciesDef sp)

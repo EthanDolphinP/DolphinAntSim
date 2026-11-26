@@ -15,8 +15,10 @@ namespace AntSim
         public int Order;
         public string Name = "New species";
         [TextArea(2, 4)] public string Description = "";
-        [Tooltip("Body drawing style in the shader: 0 ellipse, 1 segmented, 2 slender, 3 chunky.")]
-        [Range(0, 3)] public int Shape;
+        [Tooltip("Body drawing style in the shader: 0 ellipse, 1 segmented, 2 slender, 3 chunky, 4 termite.")]
+        [Range(0, 4)] public int Shape;
+        [Tooltip("How hard the species is to play: 0 easy, 1 normal, 2 hard, 3 very hard (shown on the start screen).")]
+        [Range(0, 3)] public int Difficulty = 1;
         public float Speed = 1f;
         public float Health = 1f;
         public float Damage = 1f;
@@ -35,6 +37,16 @@ namespace AntSim
         [Range(0f, 0.6f)] public float SoldierRatio = 0.1f;
         [Tooltip("Fungus garden level at the start.")]
         public int StartGarden;
+
+        [Header("Special rules")]
+        [Tooltip("Nests only in trees (termites). Each nest eats its tree's wood for food, slowly killing it.")]
+        public bool TreeNester;
+        [Tooltip("Workers always gather leaves and eat them directly (food per leaf = FoodPerLeaf x GardenYield), no garden needed.")]
+        public bool LeafEater;
+        [Tooltip("Can't keep aphids or grow a fungus garden.")]
+        public bool NoFarming;
+        [Tooltip("Slave-makers: workers captured (as pupae) per enemy ant your colony kills.")]
+        public float Captives;
         [Tooltip("Extra castes: variants of workers or soldiers (at most 3).")]
         public List<MorphDef> Castes = new List<MorphDef>();
 
@@ -48,6 +60,9 @@ namespace AntSim
 
         /// <summary>Morph slot (1..3) of an extra caste, in list order; 0 is the plain worker or soldier.</summary>
         public MorphDef Morph(int slot) => slot >= 1 && slot <= Castes.Count && slot <= MorphDef.MaxExtra ? Castes[slot - 1] : null;
+
+        public static readonly string[] DifficultyNames = { "Easy", "Normal", "Hard", "Very hard" };
+        public string DifficultyName => DifficultyNames[Mathf.Clamp(Difficulty, 0, 3)];
 
         /// <summary>The name of a morph slot, given its base caste.</summary>
         public string MorphName(int slot, Caste baseCaste)
